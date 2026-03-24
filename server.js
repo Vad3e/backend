@@ -6,11 +6,10 @@ const multer = require('multer');
 const fs = require('fs');
 const nodemailer = require('nodemailer'); 
 const crypto = require('crypto');
-
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
-
+// focBpNMcb1yNEIO1 password for tidb
 // ⚡ SETUP NODEMAILER
 const transporter = nodemailer.createTransport({
     host: 'smtp.gmail.com',
@@ -44,17 +43,25 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
+// ⚡ UPDATED: Added SSL requirement for TiDB Cloud
 const db = mysql.createConnection({
     host: process.env.DB_HOST || 'localhost', 
     user: process.env.DB_USER || 'root', 
     password: process.env.DB_PASSWORD || 'deploydesk', 
     database: process.env.DB_NAME || 'deploydesk_db',
-    port: process.env.DB_PORT || 3306
+    port: process.env.DB_PORT || 4000,
+    ssl: {
+        minVersion: 'TLSv1.2',
+        rejectUnauthorized: true
+    }
 });
 
 db.connect((err) => {
-    if (err) throw err;
-    console.log('✅ Connected to MySQL Database (System Online!)');
+    if (err) {
+        console.error('❌ Database connection failed:', err.message);
+    } else {
+        console.log('✅ Connected to MySQL Database (System Online!)');
+    }
 });
 
 // ==========================================
