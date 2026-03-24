@@ -15,6 +15,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // ⚡ SETUP NODEMAILER
 // ⚡ SECURE NODEMAILER SETUP FOR CLOUD
 // ⚡ SECURE NODEMAILER SETUP WITH AGGRESSIVE LOGGING
+// ⚡ CRASH-PROOF EMAIL SETUP
 const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
@@ -24,40 +25,32 @@ const transporter = nodemailer.createTransport({
 });
 
 function sendEmail(to, subject, htmlContent) {
-    console.log(`\n[EMAIL SYSTEM] 🔄 Initiating email to: ${to}`);
+    console.log(`\n[EMAIL] 🔄 Attempting to send email to: ${to}`);
     
-    // 1. Check if Render actually sees your Environment Variables
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-        console.error('[EMAIL SYSTEM] ❌ ABORTED: EMAIL_USER or EMAIL_PASS environment variables are missing in Render!');
-        return;
+        console.error('[EMAIL] ❌ ABORTED: Missing EMAIL_USER or EMAIL_PASS in Render!');
+        return; // Exits quietly without crashing the server
     }
 
-    // 2. Check if a recipient was actually provided
-    if (!to) {
-        console.error('[EMAIL SYSTEM] ❌ ABORTED: No recipient address provided.');
-        return;
-    }
+    if (!to) return;
 
     const mailOptions = { 
-        from: `"DeployDesk System" <${process.env.EMAIL_USER}>`, 
+        from: `"DeployDesk" <${process.env.EMAIL_USER}>`, 
         to: to, 
         subject: subject, 
         html: htmlContent 
     };
     
-    // 3. Attempt to send and catch any hidden crashes
-    try {
-        transporter.sendMail(mailOptions, (error, info) => {
-            if (error) {
-                console.error('[EMAIL SYSTEM] ❌ FAILED to send to', to);
-                console.error('[EMAIL SYSTEM] ❌ Error details:', error.message);
-            } else {
-                console.log(`[EMAIL SYSTEM] ✅ SUCCESS: Email delivered to ${to}`);
-            }
-        });
-    } catch (err) {
-        console.error('[EMAIL SYSTEM] ❌ CRITICAL CRASH inside sendEmail:', err.message);
-    }
+    // We do NOT use 'await' here, so it runs in the background.
+    // If it fails, it just prints the error to Render Logs but lets the user sign in!
+    transporter.sendMail(mailOptions, (error, info) => {
+        if (error) {
+            console.error('[EMAIL] ❌ GOOGLE BLOCKED IT. Error details:');
+            console.error(error.message);
+        } else {
+            console.log(`[EMAIL] ✅ SUCCESS: Delivered to ${to}`);
+        }
+    });
 }
 
 const uploadDir = path.join(__dirname, 'public', 'uploads');
