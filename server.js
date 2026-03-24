@@ -45,10 +45,11 @@ const storage = multer.diskStorage({
 const upload = multer({ storage: storage });
 
 const db = mysql.createConnection({
-    host: 'localhost', 
-    user: 'root', 
-    password: 'deploydesk', 
-    database: 'deploydesk_db'
+    host: process.env.DB_HOST || 'localhost', 
+    user: process.env.DB_USER || 'root', 
+    password: process.env.DB_PASSWORD || 'deploydesk', 
+    database: process.env.DB_NAME || 'deploydesk_db',
+    port: process.env.DB_PORT || 3306
 });
 
 db.connect((err) => {
