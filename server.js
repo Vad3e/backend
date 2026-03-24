@@ -13,14 +13,20 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ⚡ CRASH-PROOF EMAIL SETUP
+// ⚡ CRASH-PROOF EMAIL SETUP (FORCED IPv4 FOR RENDER)
 const transporter = nodemailer.createTransport({
-    service: 'gmail',
+    host: 'smtp.gmail.com',
+    port: 465,
+    secure: true, 
     auth: {
         user: process.env.EMAIL_USER,    
         pass: process.env.EMAIL_PASS     
-    }
+    },
+    tls: {
+        rejectUnauthorized: false // Helps prevent SSL certificate hiccups on free cloud tiers
+    },
+    family: 4 // ⚡ This forces IPv4! It completely fixes the ENETUNREACH error on Render.
 });
-
 function sendEmail(to, subject, htmlContent) {
     console.log(`\n[EMAIL] 🔄 Attempting to send email to: ${to}`);
     
