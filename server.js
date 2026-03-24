@@ -11,10 +11,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
-// focBpNMcb1yNEIO1 password for tidb
-// ⚡ SETUP NODEMAILER
-// ⚡ SECURE NODEMAILER SETUP FOR CLOUD
-// ⚡ SECURE NODEMAILER SETUP WITH AGGRESSIVE LOGGING
+
 // ⚡ CRASH-PROOF EMAIL SETUP
 const transporter = nodemailer.createTransport({
     service: 'gmail',
@@ -29,7 +26,7 @@ function sendEmail(to, subject, htmlContent) {
     
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
         console.error('[EMAIL] ❌ ABORTED: Missing EMAIL_USER or EMAIL_PASS in Render!');
-        return; // Exits quietly without crashing the server
+        return; 
     }
 
     if (!to) return;
@@ -41,8 +38,6 @@ function sendEmail(to, subject, htmlContent) {
         html: htmlContent 
     };
     
-    // We do NOT use 'await' here, so it runs in the background.
-    // If it fails, it just prints the error to Render Logs but lets the user sign in!
     transporter.sendMail(mailOptions, (error, info) => {
         if (error) {
             console.error('[EMAIL] ❌ GOOGLE BLOCKED IT. Error details:');
@@ -65,7 +60,7 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
-// ⚡ UPDATED: Added SSL requirement for TiDB Cloud
+// ⚡ SECURE TiDB CONNECTION
 const db = mysql.createConnection({
     host: process.env.DB_HOST || 'localhost', 
     user: process.env.DB_USER || 'root', 
@@ -95,24 +90,73 @@ app.post('/api/login', (req, res) => {
         if (err) { res.status(500).json({ success: false, message: 'Database error' }); return; }
         if (results.length > 0) {
             const user = results[0];
-            res.json({ success: true, user: { id: user.id, email: user.email, name: user.full_name, role: user.role, contact: user.contact_number, position: user.position } });
+            res.json({ success: true, user: { id: user.id, email: user.email, name: user.full_name, role: user.role, contact: user.contact_number, position: user.position, avatar: user.avatar } });
         } else { res.status(401).json({ success: false, message: 'Invalid email or password' }); }
     });
 });
 
+// ⚡ FULLY LOGGED SIGNUP ROUTE
 app.post('/api/signup', (req, res) => {
+    console.log('\n[SIGNUP] 🔄 Received new signup request!');
+    console.log('[SIGNUP] Payload:', req.body);
+
     const { email, password, fullName, contact, role, memberPosition } = req.body;
-    db.query(`SELECT * FROM users WHERE email = ?`, [email], (err, results) => {
-        if (err) { res.status(500).json({ success: false }); return; }
-        if (results.length > 0) { res.status(400).json({ success: false, message: 'Email exists!' }); return; }
-        
-        db.query(`INSERT INTO users (full_name, email, contact_number, password_hash, role, position) VALUES (?, ?, ?, ?, ?, ?)`, 
-        [fullName, email, contact, password, role, memberPosition || null], (err, result) => {
-            if (err) { res.status(500).json({ success: false }); return; }
-            sendEmail(email, `Welcome to DeployDesk!`, `<div style="font-family: Arial, sans-serif; color: #333;"><h2 style="color: #1BA354;">Welcome to DeployDesk!</h2><p>Hello <strong>${fullName}</strong>,</p><p>Your account has been successfully created.</p></div>`);
-            res.json({ success: true, user: { id: result.insertId, name: fullName, email, role, contact, position: memberPosition || null } });
+
+    if (!email || !password || !fullName) {
+        console.log('[SIGNUP] ❌ Failed: Missing required fields');
+        return res.status(400).json({ success: false, message: 'Missing required fields' });
+    }
+
+    try {
+        db.query('SELECT id FROM users WHERE email = ?', [email], (err, results) => {
+            if (err) {
+                console.error('[SIGNUP] ❌ Database error checking email:', err);
+                return res.status(500).json({ success: false, message: 'Database error' });
+            }
+
+            if (results.length > 0) {
+                console.log('[SIGNUP] ❌ Failed: Email already registered');
+                return res.status(400).json({ success: false, message: 'Email is already registered' });
+            }
+
+            console.log('[SIGNUP] ✅ Email is available. Hashing password...');
+            const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
+
+            console.log('[SIGNUP] ✅ Password hashed. Saving to database...');
+            const sql = 'INSERT INTO users (full_name, email, contact_number, password_hash, role, position) VALUES (?, ?, ?, ?, ?, ?)';
+            const params = [fullName, email, contact || null, passwordHash, role, memberPosition || null];
+
+            db.query(sql, params, (insertErr, result) => {
+                if (insertErr) {
+                    console.error('[SIGNUP] ❌ Database error inserting new user:', insertErr);
+                    return res.status(500).json({ success: false, message: 'Database error creating user' });
+                }
+
+                console.log(`[SIGNUP] ✅ User saved to DB! New ID: ${result.insertId}`);
+
+                const welcomeHtml = `
+                    <div style="font-family: Arial; padding: 20px; color: #111;">
+                        <h2>Welcome to DeployDesk, ${fullName}!</h2>
+                        <p>Your account has been successfully created.</p>
+                        <p><strong>Role:</strong> ${role.toUpperCase()}</p>
+                    </div>`;
+                sendEmail(email, 'Welcome to DeployDesk!', welcomeHtml);
+
+                db.query('SELECT id, full_name as name, email, role, position, contact_number as contact, avatar FROM users WHERE id = ?', [result.insertId], (fetchErr, newUsers) => {
+                    if (fetchErr) {
+                        console.error('[SIGNUP] ❌ Database error fetching new user:', fetchErr);
+                        return res.status(500).json({ success: false, message: 'Account created but failed to load data.' });
+                    }
+                    
+                    console.log('[SIGNUP] 🎉 Sign up completely successful! Sending data to Netlify.');
+                    res.json({ success: true, user: newUsers[0] });
+                });
+            });
         });
-    });
+    } catch (catchedErr) {
+        console.error('[SIGNUP] ❌ CRITICAL CRASH:', catchedErr);
+        res.status(500).json({ success: false, message: 'Server crash' });
+    }
 });
 
 app.post('/api/forgot-password', (req, res) => {
@@ -189,19 +233,30 @@ app.post('/api/events', upload.array('files', 10), (req, res) => {
         try {
             const parsedReqs = JSON.parse(personnelReqs);
             if (parsedReqs && parsedReqs.length > 0) {
-                const pythonProcess = spawn('python', ['ccaa_engine.py', eventId, personnelReqs]);
+                const pythonProcess = spawn('python3', ['ccaa_engine.py', eventId, personnelReqs]);
                 pythonProcess.stdout.on('data', (data) => console.log(`🐍 Python Engine: ${data}`));
                 pythonProcess.stderr.on('data', (data) => console.error(`❌ Python Error: ${data}`));
             }
         } catch(e) {}
 
-        db.query(`SELECT id, position FROM users WHERE role = 'admin'`, (err, admins) => {
+        // ⚡ Email Admins about the new ticket
+        db.query(`SELECT id, position, email FROM users WHERE role = 'admin'`, (err, admins) => {
             if (admins && admins.length > 0) {
-                admins.forEach(admin => db.query(`INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, 'warning', ?)`, [admin.id, `New Ticket: Event "${title}" needs your initial approval.`, eventId], () => {}));
+                admins.forEach(admin => {
+                    db.query(`INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, 'warning', ?)`, [admin.id, `New Ticket: Event "${title}" needs your initial approval.`, eventId], () => {});
+                    if(admin.email) sendEmail(admin.email, 'DeployDesk: New Ticket Requires Approval', `<div style="font-family:Arial; color:#333;"><p>Hello Admin,</p><p>A new event request <b>"${title}"</b> has been submitted and requires your initial approval before the matching engine can run.</p></div>`);
+                });
             }
         });
 
+        // ⚡ Email Requester that it was received
         db.query('INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, ?, ?)', [safeRequesterId, `Ticket Submitted: Your request for "${title}" is awaiting initial admin review.`, 'info', eventId], () => {});
+        db.query('SELECT email, full_name FROM users WHERE id = ?', [safeRequesterId], (err, users) => {
+            if(users && users.length > 0) {
+                sendEmail(users[0].email, 'DeployDesk: Ticket Submitted', `<div style="font-family:Arial; color:#333;"><p>Hello ${users[0].full_name},</p><p>Your event request <b>"${title}"</b> has been successfully submitted and is now awaiting admin review.</p></div>`);
+            }
+        });
+        
         res.json({ success: true });
     });
 });
@@ -247,6 +302,7 @@ app.post('/api/events/roster', (req, res) => {
     });
 });
 
+// ⚡ AUTOMATED EMAILS ON MATCHING AND APPROVAL
 app.post('/api/events/status', (req, res) => {
     const { eventId, status, selectedAllocations, myOrg } = req.body;
 
@@ -261,6 +317,7 @@ app.post('/api/events/status', (req, res) => {
         try { if (ev.personnel_reqs) reqs = JSON.parse(ev.personnel_reqs); } catch(e) {}
         let requiredOrgs = [...new Set(reqs.map(r => r.group))]; 
 
+        // --- 1. INITIAL APPROVAL (NOTIFY MEMBERS) ---
         if (status === 'initial_approve') {
             if (myOrg && !approvals.initial.includes(myOrg)) approvals.initial.push(myOrg);
             const isFullyApproved = requiredOrgs.every(org => approvals.initial.includes(org));
@@ -269,10 +326,11 @@ app.post('/api/events/status', (req, res) => {
                 if (isFullyApproved) {
                     db.query(`UPDATE event_requests SET status = 'pending' WHERE id = ?`, [eventId], () => {
                         db.query(`UPDATE event_allocations SET status = 'notified' WHERE event_id = ? AND status = 'eligible'`, [eventId], () => {
-                            db.query(`SELECT user_id FROM event_allocations WHERE event_id = ? AND status = 'notified'`, [eventId], (err, allocations) => {
+                            db.query(`SELECT a.user_id, u.email, u.full_name FROM event_allocations a JOIN users u ON a.user_id = u.id WHERE a.event_id = ? AND a.status = 'notified'`, [eventId], (err, allocations) => {
                                 if (allocations) {
                                     allocations.forEach(a => {
                                         db.query("INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, 'info', ?)", [a.user_id, `⚡ CCAA Alert: You match the required schedule for '${ev.title}'. Check dashboard!`, eventId], () => {});
+                                        sendEmail(a.email, 'DeployDesk: New Coverage Match!', `<div style="font-family:Arial; color:#333;"><p>Hello ${a.full_name},</p><p>You match the schedule requirements for <b>"${ev.title}"</b>! Please log into your dashboard to accept or decline the task.</p></div>`);
                                     });
                                 }
                             });
@@ -284,6 +342,7 @@ app.post('/api/events/status', (req, res) => {
                 }
             });
         } 
+        // --- 2. FINAL APPROVAL (NOTIFY TEAM & REQUESTER) ---
         else if (status === 'approved') {
             if (myOrg && !approvals.final.includes(myOrg)) approvals.final.push(myOrg);
             
@@ -295,14 +354,15 @@ app.post('/api/events/status', (req, res) => {
             db.query(`UPDATE event_requests SET admin_approvals = ? WHERE id = ?`, [JSON.stringify(approvals), eventId], () => {
                 if (isFullyApproved) {
                     db.query(`UPDATE event_requests SET status = 'approved' WHERE id = ?`, [eventId], () => {
-                        db.query(`SELECT u.full_name, ea.required_role, u.id as user_id FROM event_allocations ea JOIN users u ON ea.user_id = u.id WHERE ea.event_id = ? AND ea.status = 'assigned'`, [eventId], (err, memberDetails) => {
+                        db.query(`SELECT u.full_name, u.email, ea.required_role, u.id as user_id FROM event_allocations ea JOIN users u ON ea.user_id = u.id WHERE ea.event_id = ? AND ea.status = 'assigned'`, [eventId], (err, memberDetails) => {
                             if (memberDetails) {
-                                memberDetails.forEach(m => {
-                                    db.query(`INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, 'success', ?)`, [m.user_id, `You have been officially ASSIGNED to cover an event!`, eventId]);
-                                });
-
                                 let teamListHtml = '<ul style="background: #f4f4f4; padding: 15px; border-radius: 8px; list-style: none;">';
-                                memberDetails.forEach(m => { teamListHtml += `<li style="margin-bottom: 8px;">✅ <strong>${m.full_name}</strong> — ${m.required_role}</li>`; });
+                                
+                                memberDetails.forEach(m => { 
+                                    teamListHtml += `<li style="margin-bottom: 8px;">✅ <strong>${m.full_name}</strong> — ${m.required_role}</li>`; 
+                                    db.query(`INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, 'success', ?)`, [m.user_id, `You have been officially ASSIGNED to cover an event!`, eventId]);
+                                    sendEmail(m.email, 'DeployDesk: Official Assignment', `<div style="font-family:Arial; color:#333;"><p>Hello ${m.full_name},</p><p>You have been officially <b>ASSIGNED</b> to cover <b>"${ev.title}"</b> as <b>${m.required_role}</b>. Please check your schedule.</p></div>`);
+                                });
                                 teamListHtml += '</ul>';
 
                                 db.query(`SELECT u.email, u.full_name, e.title, e.requester_id FROM event_requests e JOIN users u ON e.requester_id = u.id WHERE e.id = ?`, [eventId], (err, results) => {
@@ -335,8 +395,6 @@ app.post('/api/events/status', (req, res) => {
 // ==========================================
 // 3. ALLOCATIONS & ADMIN DIRECTORY
 // ==========================================
-
-// ⚡ FIX: Added e.status as event_status to tell the frontend if the ticket has moved past the member
 app.get('/api/allocations/member/:userId', (req, res) => {
     db.query(`SELECT a.*, e.title, e.event_date, e.start_time, e.venue, e.status as event_status FROM event_allocations a JOIN event_requests e ON a.event_id = e.id WHERE a.user_id = ?`, [req.params.userId], (err, results) => {
         res.json({ success: !err, tasks: results });
@@ -358,19 +416,15 @@ app.get('/api/users', (req, res) => {
 });
 app.post('/api/users/upgrade', (req, res) => { db.query(`UPDATE users SET role = 'administrative' WHERE id = ?`, [req.body.userId], (err) => res.json({ success: !err })); });
 app.post('/api/users/demote', (req, res) => { db.query(`UPDATE users SET role = 'member' WHERE id = ?`, [req.body.userId], (err) => res.json({ success: !err })); });
-// ⚡ UPDATED: Profile update endpoint with Avatar support
+
 app.post('/api/users/update', (req, res) => {
     const { userId, fullName, contact, position, avatar } = req.body;
-    
     let sql = 'UPDATE users SET full_name = ?, contact_number = ?, position = ?';
     let params = [fullName, contact, position];
-
-    // Only update the avatar if the user actually uploaded a new one
     if (avatar) {
         sql += ', avatar = ?';
         params.push(avatar);
     }
-
     sql += ' WHERE id = ?';
     params.push(userId);
 
@@ -382,6 +436,7 @@ app.post('/api/users/update', (req, res) => {
         res.json({ success: true });
     });
 });
+
 app.post('/api/users/remove', (req, res) => {
     const uid = req.body.userId;
     db.query(`DELETE FROM event_allocations WHERE user_id = ?`, [uid], () => {
