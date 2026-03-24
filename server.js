@@ -13,23 +13,32 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 // focBpNMcb1yNEIO1 password for tidb
 // ⚡ SETUP NODEMAILER
+// ⚡ SECURE NODEMAILER SETUP FOR CLOUD
 const transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true, 
+    service: 'gmail',
     auth: {
-        user: 'deploydesk@gmail.com',    
-        pass: 'cuxqpbsqalbzvhdw'     
-    },
-    tls: { rejectUnauthorized: false }
+        user: process.env.EMAIL_USER,    
+        pass: process.env.EMAIL_PASS     
+    }
 });
 
+// ⚡ Improved error logging to catch exactly why an email fails
 function sendEmail(to, subject, htmlContent) {
     if (!to) return;
-    const mailOptions = { from: '"DeployDesk System" <deploydesk@gmail.com>', to: to, subject: subject, html: htmlContent };
+    const mailOptions = { 
+        from: '"DeployDesk System" <' + process.env.EMAIL_USER + '>', 
+        to: to, 
+        subject: subject, 
+        html: htmlContent 
+    };
+    
     transporter.sendMail(mailOptions, (error, info) => {
-        if (error) console.log('❌ Email failed to send:', error.message);
-        else console.log(`📧 Automated Email sent successfully to: ${to}`);
+        if (error) {
+            console.error('❌ Email failed to send to', to);
+            console.error('Error details:', error.message);
+        } else {
+            console.log(`📧 Automated Email sent successfully to: ${to}`);
+        }
     });
 }
 
