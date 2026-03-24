@@ -8,6 +8,7 @@ const fs = require('fs');
 const nodemailer = require('nodemailer'); 
 const crypto = require('crypto');
 const app = express();
+app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 // focBpNMcb1yNEIO1 password for tidb
