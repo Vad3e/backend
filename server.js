@@ -14,6 +14,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // focBpNMcb1yNEIO1 password for tidb
 // ⚡ SETUP NODEMAILER
 // ⚡ SECURE NODEMAILER SETUP FOR CLOUD
+// ⚡ SECURE NODEMAILER SETUP WITH AGGRESSIVE LOGGING
 const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
@@ -22,24 +23,41 @@ const transporter = nodemailer.createTransport({
     }
 });
 
-// ⚡ Improved error logging to catch exactly why an email fails
 function sendEmail(to, subject, htmlContent) {
-    if (!to) return;
+    console.log(`\n[EMAIL SYSTEM] 🔄 Initiating email to: ${to}`);
+    
+    // 1. Check if Render actually sees your Environment Variables
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+        console.error('[EMAIL SYSTEM] ❌ ABORTED: EMAIL_USER or EMAIL_PASS environment variables are missing in Render!');
+        return;
+    }
+
+    // 2. Check if a recipient was actually provided
+    if (!to) {
+        console.error('[EMAIL SYSTEM] ❌ ABORTED: No recipient address provided.');
+        return;
+    }
+
     const mailOptions = { 
-        from: '"DeployDesk System" <' + process.env.EMAIL_USER + '>', 
+        from: `"DeployDesk System" <${process.env.EMAIL_USER}>`, 
         to: to, 
         subject: subject, 
         html: htmlContent 
     };
     
-    transporter.sendMail(mailOptions, (error, info) => {
-        if (error) {
-            console.error('❌ Email failed to send to', to);
-            console.error('Error details:', error.message);
-        } else {
-            console.log(`📧 Automated Email sent successfully to: ${to}`);
-        }
-    });
+    // 3. Attempt to send and catch any hidden crashes
+    try {
+        transporter.sendMail(mailOptions, (error, info) => {
+            if (error) {
+                console.error('[EMAIL SYSTEM] ❌ FAILED to send to', to);
+                console.error('[EMAIL SYSTEM] ❌ Error details:', error.message);
+            } else {
+                console.log(`[EMAIL SYSTEM] ✅ SUCCESS: Email delivered to ${to}`);
+            }
+        });
+    } catch (err) {
+        console.error('[EMAIL SYSTEM] ❌ CRITICAL CRASH inside sendEmail:', err.message);
+    }
 }
 
 const uploadDir = path.join(__dirname, 'public', 'uploads');
@@ -347,8 +365,30 @@ app.get('/api/users', (req, res) => {
 });
 app.post('/api/users/upgrade', (req, res) => { db.query(`UPDATE users SET role = 'administrative' WHERE id = ?`, [req.body.userId], (err) => res.json({ success: !err })); });
 app.post('/api/users/demote', (req, res) => { db.query(`UPDATE users SET role = 'member' WHERE id = ?`, [req.body.userId], (err) => res.json({ success: !err })); });
-app.post('/api/users/update', (req, res) => { db.query(`UPDATE users SET full_name = ?, contact_number = ?, position = ? WHERE id = ?`, [req.body.fullName, req.body.contact, req.body.position || null, req.body.userId], (err) => res.json({ success: !err })); });
+// ⚡ UPDATED: Profile update endpoint with Avatar support
+app.post('/api/users/update', (req, res) => {
+    const { userId, fullName, contact, position, avatar } = req.body;
+    
+    let sql = 'UPDATE users SET full_name = ?, contact_number = ?, position = ?';
+    let params = [fullName, contact, position];
 
+    // Only update the avatar if the user actually uploaded a new one
+    if (avatar) {
+        sql += ', avatar = ?';
+        params.push(avatar);
+    }
+
+    sql += ' WHERE id = ?';
+    params.push(userId);
+
+    db.query(sql, params, (err, result) => {
+        if (err) {
+            console.error('❌ Update Profile Error:', err);
+            return res.status(500).json({ success: false, message: 'Database error' });
+        }
+        res.json({ success: true });
+    });
+});
 app.post('/api/users/remove', (req, res) => {
     const uid = req.body.userId;
     db.query(`DELETE FROM event_allocations WHERE user_id = ?`, [uid], () => {
