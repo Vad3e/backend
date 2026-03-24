@@ -1,19 +1,29 @@
-import sys
+import os
 import json
+import sys
 import mysql.connector
-from datetime import datetime
 
 def run_ccaa_algorithm(event_id, reqs_json):
+    # ⚡ Read the Cloud Database credentials from Render's environment
+    db_host = os.environ.get('DB_HOST', 'localhost')
+    db_user = os.environ.get('DB_USER', 'root')
+    db_pass = os.environ.get('DB_PASSWORD', 'deploydesk')
+    db_name = os.environ.get('DB_NAME', 'deploydesk_db')
+    db_port = int(os.environ.get('DB_PORT', 4000))
+
+    db = None
     try:
-        # 1. Connect to your Database
+        # Connect to TiDB Cloud securely
         db = mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password="deploydesk",
-            database="deploydesk_db"
+            host=db_host,
+            user=db_user,
+            password=db_pass,
+            database=db_name,
+            port=db_port,
+            ssl_disabled=False
         )
         cursor = db.cursor(dictionary=True)
-
+        
         # 2. Fetch Event Details (⚡ No duration_hours needed)
         cursor.execute("SELECT event_date, start_time, title, status FROM event_requests WHERE id = %s", (event_id,))
         event = cursor.fetchone()
@@ -73,11 +83,14 @@ def run_ccaa_algorithm(event_id, reqs_json):
     except Exception as e:
         print(f"Python CCAA Error: {e}")
     finally:
-        if 'db' in locals() and db.is_connected():
+        if db and db.is_connected():
             cursor.close()
             db.close()
 
 if __name__ == "__main__":
-    passed_event_id = int(sys.argv[1])
-    passed_reqs = sys.argv[2]
-    run_ccaa_algorithm(passed_event_id, passed_reqs)
+    if len(sys.argv) > 2:
+        passed_event_id = int(sys.argv[1])
+        passed_reqs = sys.argv[2]
+        run_ccaa_algorithm(passed_event_id, passed_reqs)
+    else:
+        print("Missing arguments for CCAA Engine.")
