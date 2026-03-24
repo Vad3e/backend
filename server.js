@@ -1,5 +1,6 @@
 const { spawn } = require('child_process');
 const express = require('express');
+const cors = require('cors');
 const mysql = require('mysql2');
 const path = require('path');
 const multer = require('multer');
