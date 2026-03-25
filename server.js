@@ -68,6 +68,7 @@ const upload = multer({ storage: storage });
 
 // ⚡ SECURE TiDB CONNECTION
 // ⚡ SECURE TiDB CONNECTION POOL (Crash-Proof)
+// ⚡ SECURE TiDB CONNECTION POOL (Crash-Proof)
 const db = mysql.createPool({
     host: process.env.DB_HOST || 'localhost', 
     user: process.env.DB_USER || 'root', 
@@ -78,12 +79,12 @@ const db = mysql.createPool({
         minVersion: 'TLSv1.2',
         rejectUnauthorized: true
     },
-    // Pool specific settings to prevent dropped connections
+    // Pool settings to manage dropped connections gracefully
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0,
     enableKeepAlive: true,
-    keepAliveInitialDelay: 0
+    keepAliveInitialDelay: 10000
 });
 
 // Test the pool connection on startup
@@ -96,6 +97,16 @@ db.getConnection((err, connection) => {
     }
 });
 
+// ⚡ CRITICAL: This catches the dropped connection error so Node doesn't crash!
+db.on('error', (err) => {
+    if (err.code === 'PROTOCOL_CONNECTION_LOST') {
+        console.error('⚠️ Database connection was closed by TiDB. The pool will automatically reconnect.');
+    } else if (err.code === 'ECONNRESET') {
+        console.error('⚠️ Database connection was reset. The pool will automatically reconnect.');
+    } else {
+        console.error('❌ Unexpected Database Error:', err);
+    }
+});
 // ==========================================
 // 1. AUTH & PASSWORD RESET ENDPOINTS
 // ==========================================
