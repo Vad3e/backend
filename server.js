@@ -67,7 +67,8 @@ const storage = multer.diskStorage({
 const upload = multer({ storage: storage });
 
 // ⚡ SECURE TiDB CONNECTION
-const db = mysql.createConnection({
+// ⚡ SECURE TiDB CONNECTION POOL (Crash-Proof)
+const db = mysql.createPool({
     host: process.env.DB_HOST || 'localhost', 
     user: process.env.DB_USER || 'root', 
     password: process.env.DB_PASSWORD || 'deploydesk', 
@@ -76,14 +77,22 @@ const db = mysql.createConnection({
     ssl: {
         minVersion: 'TLSv1.2',
         rejectUnauthorized: true
-    }
+    },
+    // Pool specific settings to prevent dropped connections
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0,
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 0
 });
 
-db.connect((err) => {
+// Test the pool connection on startup
+db.getConnection((err, connection) => {
     if (err) {
-        console.error('❌ Database connection failed:', err.message);
+        console.error('❌ Database pool connection failed:', err.message);
     } else {
-        console.log('✅ Connected to MySQL Database (System Online!)');
+        console.log('✅ Connected to MySQL Database Pool (System Online!)');
+        connection.release(); // Return it to the pool
     }
 });
 
