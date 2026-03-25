@@ -8,16 +8,27 @@ const fs = require('fs');
 const nodemailer = require('nodemailer'); 
 const crypto = require('crypto');
 
-// ⚡ 1. IMPORT THE DNS MODULE
+// ⚡ 1. IMPORT THE DNS MODULE & GLOBALLY FORCE IPv4
 const dns = require('dns');
-
-// ⚡ 2. GLOBALLY FORCE IPv4 (This permanently kills the ENETUNREACH IPv6 error!)
 dns.setDefaultResultOrder('ipv4first');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ⚡ 2. RESTORED: FILE UPLOAD SETUP (MULTER)
+const uploadDir = path.join(__dirname, 'public', 'uploads');
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) { cb(null, uploadDir) },
+    filename: function (req, file, cb) { 
+        const safeName = file.originalname.replace(/[^a-zA-Z0-9.]/g, '_');
+        cb(null, Date.now() + '-' + safeName); 
+    }
+});
+const upload = multer({ storage: storage });
 
 // ⚡ 3. BULLETPROOF EMAIL SETUP
 const transporter = nodemailer.createTransport({
@@ -30,7 +41,8 @@ const transporter = nodemailer.createTransport({
     },
     tls: {
         rejectUnauthorized: false
-    }
+    },
+    family: 4 
 });
 
 function sendEmail(to, subject, htmlContent) {
@@ -59,7 +71,45 @@ function sendEmail(to, subject, htmlContent) {
         }
     });
 }
-// =====================================
+
+// ⚡ 4. SECURE TiDB CONNECTION POOL (Crash-Proof)
+const db = mysql.createPool({
+    host: process.env.DB_HOST || 'localhost', 
+    user: process.env.DB_USER || 'root', 
+    password: process.env.DB_PASSWORD || 'deploydesk', 
+    database: process.env.DB_NAME || 'deploydesk_db',
+    port: process.env.DB_PORT || 4000,
+    ssl: {
+        minVersion: 'TLSv1.2',
+        rejectUnauthorized: true
+    },
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0,
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 10000
+});
+
+db.getConnection((err, connection) => {
+    if (err) {
+        console.error('❌ Database pool connection failed:', err.message);
+    } else {
+        console.log('✅ Connected to MySQL Database Pool (System Online!)');
+        connection.release(); 
+    }
+});
+
+db.on('error', (err) => {
+    if (err.code === 'PROTOCOL_CONNECTION_LOST') {
+        console.error('⚠️ Database connection was closed by TiDB. The pool will automatically reconnect.');
+    } else if (err.code === 'ECONNRESET') {
+        console.error('⚠️ Database connection was reset. The pool will automatically reconnect.');
+    } else {
+        console.error('❌ Unexpected Database Error:', err);
+    }
+});
+
+// ==========================================
 // 1. AUTH & PASSWORD RESET ENDPOINTS
 // ==========================================
 app.post('/api/login', (req, res) => {
@@ -73,11 +123,8 @@ app.post('/api/login', (req, res) => {
     });
 });
 
-// ⚡ FULLY LOGGED SIGNUP ROUTE
 app.post('/api/signup', (req, res) => {
     console.log('\n[SIGNUP] 🔄 Received new signup request!');
-    console.log('[SIGNUP] Payload:', req.body);
-
     const { email, password, fullName, contact, role, memberPosition } = req.body;
 
     if (!email || !password || !fullName) {
@@ -87,28 +134,15 @@ app.post('/api/signup', (req, res) => {
 
     try {
         db.query('SELECT id FROM users WHERE email = ?', [email], (err, results) => {
-            if (err) {
-                console.error('[SIGNUP] ❌ Database error checking email:', err);
-                return res.status(500).json({ success: false, message: 'Database error' });
-            }
+            if (err) return res.status(500).json({ success: false, message: 'Database error' });
+            if (results.length > 0) return res.status(400).json({ success: false, message: 'Email is already registered' });
 
-            if (results.length > 0) {
-                console.log('[SIGNUP] ❌ Failed: Email already registered');
-                return res.status(400).json({ success: false, message: 'Email is already registered' });
-            }
-
-            console.log('[SIGNUP] ✅ Email is available. Hashing password...');
             const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
-
-            console.log('[SIGNUP] ✅ Password hashed. Saving to database...');
             const sql = 'INSERT INTO users (full_name, email, contact_number, password_hash, role, position) VALUES (?, ?, ?, ?, ?, ?)';
             const params = [fullName, email, contact || null, passwordHash, role, memberPosition || null];
 
             db.query(sql, params, (insertErr, result) => {
-                if (insertErr) {
-                    console.error('[SIGNUP] ❌ Database error inserting new user:', insertErr);
-                    return res.status(500).json({ success: false, message: 'Database error creating user' });
-                }
+                if (insertErr) return res.status(500).json({ success: false, message: 'Database error creating user' });
 
                 console.log(`[SIGNUP] ✅ User saved to DB! New ID: ${result.insertId}`);
 
@@ -121,18 +155,13 @@ app.post('/api/signup', (req, res) => {
                 sendEmail(email, 'Welcome to DeployDesk!', welcomeHtml);
 
                 db.query('SELECT id, full_name as name, email, role, position, contact_number as contact, avatar FROM users WHERE id = ?', [result.insertId], (fetchErr, newUsers) => {
-                    if (fetchErr) {
-                        console.error('[SIGNUP] ❌ Database error fetching new user:', fetchErr);
-                        return res.status(500).json({ success: false, message: 'Account created but failed to load data.' });
-                    }
-                    
+                    if (fetchErr) return res.status(500).json({ success: false, message: 'Account created but failed to load data.' });
                     console.log('[SIGNUP] 🎉 Sign up completely successful! Sending data to Netlify.');
                     res.json({ success: true, user: newUsers[0] });
                 });
             });
         });
     } catch (catchedErr) {
-        console.error('[SIGNUP] ❌ CRITICAL CRASH:', catchedErr);
         res.status(500).json({ success: false, message: 'Server crash' });
     }
 });
@@ -217,7 +246,6 @@ app.post('/api/events', upload.array('files', 10), (req, res) => {
             }
         } catch(e) {}
 
-        // ⚡ Email Admins about the new ticket
         db.query(`SELECT id, position, email FROM users WHERE role = 'admin'`, (err, admins) => {
             if (admins && admins.length > 0) {
                 admins.forEach(admin => {
@@ -227,7 +255,6 @@ app.post('/api/events', upload.array('files', 10), (req, res) => {
             }
         });
 
-        // ⚡ Email Requester that it was received
         db.query('INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, ?, ?)', [safeRequesterId, `Ticket Submitted: Your request for "${title}" is awaiting initial admin review.`, 'info', eventId], () => {});
         db.query('SELECT email, full_name FROM users WHERE id = ?', [safeRequesterId], (err, users) => {
             if(users && users.length > 0) {
@@ -280,7 +307,6 @@ app.post('/api/events/roster', (req, res) => {
     });
 });
 
-// ⚡ AUTOMATED EMAILS ON MATCHING AND APPROVAL
 app.post('/api/events/status', (req, res) => {
     const { eventId, status, selectedAllocations, myOrg } = req.body;
 
@@ -295,7 +321,6 @@ app.post('/api/events/status', (req, res) => {
         try { if (ev.personnel_reqs) reqs = JSON.parse(ev.personnel_reqs); } catch(e) {}
         let requiredOrgs = [...new Set(reqs.map(r => r.group))]; 
 
-        // --- 1. INITIAL APPROVAL (NOTIFY MEMBERS) ---
         if (status === 'initial_approve') {
             if (myOrg && !approvals.initial.includes(myOrg)) approvals.initial.push(myOrg);
             const isFullyApproved = requiredOrgs.every(org => approvals.initial.includes(org));
@@ -320,7 +345,6 @@ app.post('/api/events/status', (req, res) => {
                 }
             });
         } 
-        // --- 2. FINAL APPROVAL (NOTIFY TEAM & REQUESTER) ---
         else if (status === 'approved') {
             if (myOrg && !approvals.final.includes(myOrg)) approvals.final.push(myOrg);
             
