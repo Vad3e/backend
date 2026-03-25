@@ -7,13 +7,19 @@ const multer = require('multer');
 const fs = require('fs');
 const nodemailer = require('nodemailer'); 
 const crypto = require('crypto');
+
+// ⚡ 1. IMPORT THE DNS MODULE
+const dns = require('dns');
+
+// ⚡ 2. GLOBALLY FORCE IPv4 (This permanently kills the ENETUNREACH IPv6 error!)
+dns.setDefaultResultOrder('ipv4first');
+
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ⚡ CRASH-PROOF EMAIL SETUP
-// ⚡ CRASH-PROOF EMAIL SETUP (FORCED IPv4 FOR RENDER)
+// ⚡ 3. BULLETPROOF EMAIL SETUP
 const transporter = nodemailer.createTransport({
     host: 'smtp.gmail.com',
     port: 465,
@@ -23,10 +29,10 @@ const transporter = nodemailer.createTransport({
         pass: process.env.EMAIL_PASS     
     },
     tls: {
-        rejectUnauthorized: false // Helps prevent SSL certificate hiccups on free cloud tiers
-    },
-    family: 4 // ⚡ This forces IPv4! It completely fixes the ENETUNREACH error on Render.
+        rejectUnauthorized: false
+    }
 });
+
 function sendEmail(to, subject, htmlContent) {
     console.log(`\n[EMAIL] 🔄 Attempting to send email to: ${to}`);
     
@@ -53,61 +59,7 @@ function sendEmail(to, subject, htmlContent) {
         }
     });
 }
-
-const uploadDir = path.join(__dirname, 'public', 'uploads');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-
-const storage = multer.diskStorage({
-    destination: function (req, file, cb) { cb(null, uploadDir) },
-    filename: function (req, file, cb) { 
-        const safeName = file.originalname.replace(/[^a-zA-Z0-9.]/g, '_');
-        cb(null, Date.now() + '-' + safeName); 
-    }
-});
-const upload = multer({ storage: storage });
-
-// ⚡ SECURE TiDB CONNECTION
-// ⚡ SECURE TiDB CONNECTION POOL (Crash-Proof)
-// ⚡ SECURE TiDB CONNECTION POOL (Crash-Proof)
-const db = mysql.createPool({
-    host: process.env.DB_HOST || 'localhost', 
-    user: process.env.DB_USER || 'root', 
-    password: process.env.DB_PASSWORD || 'deploydesk', 
-    database: process.env.DB_NAME || 'deploydesk_db',
-    port: process.env.DB_PORT || 4000,
-    ssl: {
-        minVersion: 'TLSv1.2',
-        rejectUnauthorized: true
-    },
-    // Pool settings to manage dropped connections gracefully
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0,
-    enableKeepAlive: true,
-    keepAliveInitialDelay: 10000
-});
-
-// Test the pool connection on startup
-db.getConnection((err, connection) => {
-    if (err) {
-        console.error('❌ Database pool connection failed:', err.message);
-    } else {
-        console.log('✅ Connected to MySQL Database Pool (System Online!)');
-        connection.release(); // Return it to the pool
-    }
-});
-
-// ⚡ CRITICAL: This catches the dropped connection error so Node doesn't crash!
-db.on('error', (err) => {
-    if (err.code === 'PROTOCOL_CONNECTION_LOST') {
-        console.error('⚠️ Database connection was closed by TiDB. The pool will automatically reconnect.');
-    } else if (err.code === 'ECONNRESET') {
-        console.error('⚠️ Database connection was reset. The pool will automatically reconnect.');
-    } else {
-        console.error('❌ Unexpected Database Error:', err);
-    }
-});
-// ==========================================
+// =====================================
 // 1. AUTH & PASSWORD RESET ENDPOINTS
 // ==========================================
 app.post('/api/login', (req, res) => {
