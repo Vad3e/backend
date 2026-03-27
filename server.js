@@ -192,6 +192,35 @@ app.post('/api/reset-password', (req, res) => {
 });
 
 // ==========================================
+// ⚡ GLOBAL SYSTEM SETTINGS ENDPOINTS
+// ==========================================
+app.get('/api/settings', (req, res) => {
+    db.query('SELECT * FROM system_settings', (err, results) => {
+        if (err) return res.status(500).json({ success: false });
+        const settings = {};
+        results.forEach(row => {
+            try { settings[row.setting_key] = JSON.parse(row.setting_value); }
+            catch(e) { settings[row.setting_key] = row.setting_value; }
+        });
+        res.json({ success: true, settings });
+    });
+});
+
+app.post('/api/settings', (req, res) => {
+    const { settings } = req.body;
+    const queries = [];
+    for (const [key, value] of Object.entries(settings)) {
+        queries.push(new Promise((resolve, reject) => {
+            db.query('INSERT INTO system_settings (setting_key, setting_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE setting_value = ?', 
+            [key, JSON.stringify(value), JSON.stringify(value)], (err) => {
+                if(err) reject(err); else resolve();
+            });
+        }));
+    }
+    Promise.all(queries).then(() => res.json({ success: true })).catch(() => res.status(500).json({ success: false }));
+});
+
+// ==========================================
 // 2. EVENTS, PYTHON CCAA & EMAIL TRIGGERS
 // ==========================================
 app.get('/api/events', (req, res) => {
