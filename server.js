@@ -32,9 +32,10 @@ const upload = multer({ storage: storage });
 
 // ⚡ 3. BULLETPROOF EMAIL SETUP
 const transporter = nodemailer.createTransport({
+    service: 'gmail', // Let nodemailer handle the specific Gmail routing
     host: 'smtp.gmail.com',
-    port: 587,
-    secure: false, 
+    port: 465,        // Switch to the secure SSL port
+    secure: true,     // True for port 465
     auth: {
         user: process.env.EMAIL_USER,    
         pass: process.env.EMAIL_PASS     
@@ -42,7 +43,7 @@ const transporter = nodemailer.createTransport({
     tls: {
         rejectUnauthorized: false
     },
-    family: 4 
+    family: 4         // Force IPv4
 });
 
 function sendEmail(to, subject, htmlContent) {
