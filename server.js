@@ -7,8 +7,6 @@ const multer = require('multer');
 const fs = require('fs'); 
 const crypto = require('crypto');
 
-// ⚡ ADD THIS LINE RIGHT HERE:
-const nodemailer = require('nodemailer');
 
 // ⚡ 1. IMPORT THE DNS MODULE & GLOBALLY FORCE IPv4
 const dns = require('dns');
