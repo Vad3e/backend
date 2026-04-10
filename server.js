@@ -7,6 +7,9 @@ const multer = require('multer');
 const fs = require('fs'); 
 const crypto = require('crypto');
 
+// ⚡ ADD THIS LINE RIGHT HERE:
+const nodemailer = require('nodemailer');
+
 // ⚡ 1. IMPORT THE DNS MODULE & GLOBALLY FORCE IPv4
 const dns = require('dns');
 dns.setDefaultResultOrder('ipv4first');
@@ -29,36 +32,73 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
-// // ⚡ 3. BULLETPROOF EMAIL SETUP (Using Resend API)
+// ⚡ 3. SMART HYBRID EMAIL SETUP (Nodemailer + Resend)
+const nodemailer = require('nodemailer');
 const { Resend } = require('resend');
 
-// Initialize Resend with the key from your Render environment variables
+// Setup Resend (For when the app is on Render)
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-async function sendEmail(to, subject, htmlContent) {
-    console.log(`\n[EMAIL] 🔄 Attempting to send email to: ${to} via Resend API`);
-    
-    if (!process.env.RESEND_API_KEY) {
-        console.error('[EMAIL] ❌ ABORTED: Missing RESEND_API_KEY in Render environment variables!');
-        return; 
+// Setup Nodemailer (For when the app is running on your computer)
+const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+        user: process.env.EMAIL_USER,    
+        pass: process.env.EMAIL_PASS     
     }
+});
 
+async function sendEmail(to, subject, htmlContent) {
     if (!to) return;
 
-    try {
-        const data = await resend.emails.send({
-            // NOTE: While testing, Resend only allows you to send emails FROM this specific testing address:
-            from: 'DeployDesk <onboarding@resend.dev>', 
-            // NOTE: While testing, you can only send emails TO the email address you signed up to Resend with!
-            to: to, 
-            subject: subject,
-            html: htmlContent
-        });
+    // Render automatically sets a hidden environment variable called "RENDER" to 'true'.
+    // We check for it to know where the code is currently running!
+    const isRunningOnRender = process.env.RENDER === 'true';
 
-        console.log(`[EMAIL] ✅ SUCCESS: API accepted the request! ID: ${data.id}`);
-    } catch (error) {
-        console.error('[EMAIL] ❌ FAILED: Resend API rejected the request.');
-        console.error(error);
+    if (isRunningOnRender) {
+        // ==========================================
+        // ☁️ RENDER MODE: Use Resend API
+        // ==========================================
+        console.log(`\n[EMAIL] ☁️ Server detected Render. Using Resend API for: ${to}`);
+        
+        if (!process.env.RESEND_API_KEY) {
+            console.error('[EMAIL] ❌ ABORTED: Missing RESEND_API_KEY in Render environment variables!');
+            return; 
+        }
+
+        try {
+            const { data, error } = await resend.emails.send({
+                from: 'DeployDesk <onboarding@resend.dev>', 
+                to: to, 
+                subject: subject,
+                html: htmlContent
+            });
+
+            if (error) {
+                console.error('[EMAIL] ❌ Resend API Error:', error.message);
+            } else {
+                console.log(`[EMAIL] ✅ Resend Success! ID: ${data.id}`);
+            }
+        } catch (err) {
+            console.error('[EMAIL] ❌ Resend Network Error:', err);
+        }
+        
+    } else {
+        // ==========================================
+        // 💻 LOCALHOST MODE: Use Nodemailer
+        // ==========================================
+        console.log(`\n[EMAIL] 💻 Server detected Localhost. Using Nodemailer for: ${to}`);
+        try {
+            await transporter.sendMail({ 
+                from: `"DeployDesk" <${process.env.EMAIL_USER}>`, 
+                to: to, 
+                subject: subject, 
+                html: htmlContent 
+            });
+            console.log(`[EMAIL] ✅ Nodemailer Success! Delivered to ${to}`);
+        } catch (error) {
+            console.error('[EMAIL] ❌ Nodemailer Failed:', error.message);
+        }
     }
 }
 
@@ -202,6 +242,7 @@ app.post('/api/reset-password', (req, res) => {
         });
     });
 });
+
 // ==========================================
 // ⚡ GLOBAL SYSTEM SETTINGS ENDPOINTS
 // ==========================================
