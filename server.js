@@ -105,14 +105,26 @@ db.on('error', (err) => {
 app.post('/api/login', (req, res) => {
     const { email, password } = req.body;
     
-    // ⚡ FIX: Hash the incoming password so it matches the format stored in the database
-    const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
-
-    db.query('SELECT * FROM users WHERE email = ? AND password_hash = ?', [email, passwordHash], (err, results) => {
+    // First, find the user by email only
+    db.query('SELECT * FROM users WHERE email = ?', [email], (err, results) => {
         if (err) { res.status(500).json({ success: false, message: 'Database error' }); return; }
+        
         if (results.length > 0) {
             const user = results[0];
-            res.json({ success: true, user: { id: user.id, email: user.email, name: user.full_name, role: user.role, contact: user.contact_number, position: user.position, avatar: user.avatar } });
+            const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
+            
+            // Check if the password matches the HASH *or* the PLAIN TEXT (for older/manual accounts)
+            if (user.password_hash === passwordHash || user.password_hash === password) {
+                
+                // Auto-heal: If it was plain text, quietly upgrade it to a hash in the database
+                if (user.password_hash === password) {
+                    db.query('UPDATE users SET password_hash = ? WHERE id = ?', [passwordHash, user.id]);
+                }
+
+                res.json({ success: true, user: { id: user.id, email: user.email, name: user.full_name, role: user.role, contact: user.contact_number, position: user.position, avatar: user.avatar } });
+            } else {
+                res.status(401).json({ success: false, message: 'Invalid email or password' }); 
+            }
         } else { 
             res.status(401).json({ success: false, message: 'Invalid email or password' }); 
         }
@@ -181,12 +193,15 @@ app.post('/api/reset-password', (req, res) => {
     const { token, newPassword } = req.body;
     db.query('SELECT id FROM users WHERE reset_token = ? AND reset_expires > ?', [token, Date.now()], (err, users) => {
         if (err || users.length === 0) { res.status(400).json({ success: false, message: 'Invalid or expired link.' }); return; }
-        db.query('UPDATE users SET password_hash = ?, reset_token = NULL, reset_expires = NULL WHERE id = ?', [newPassword, users[0].id], (err) => {
+        
+        // ⚡ FIX: Hash the new password before saving it so the login route doesn't break later
+        const passwordHash = crypto.createHash('sha256').update(newPassword).digest('hex');
+        
+        db.query('UPDATE users SET password_hash = ?, reset_token = NULL, reset_expires = NULL WHERE id = ?', [passwordHash, users[0].id], (err) => {
             res.json({ success: !err });
         });
     });
 });
-
 // ==========================================
 // ⚡ GLOBAL SYSTEM SETTINGS ENDPOINTS
 // ==========================================
