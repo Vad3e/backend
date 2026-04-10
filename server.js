@@ -4,8 +4,7 @@ const cors = require('cors');
 const mysql = require('mysql2');
 const path = require('path');
 const multer = require('multer');
-const fs = require('fs');
-const nodemailer = require('nodemailer'); 
+const fs = require('fs'); 
 const crypto = require('crypto');
 
 // ⚡ 1. IMPORT THE DNS MODULE & GLOBALLY FORCE IPv4
@@ -30,47 +29,37 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
-// ⚡ 3. BULLETPROOF EMAIL SETUP
-const transporter = nodemailer.createTransport({
-    service: 'gmail', // Let nodemailer handle the specific Gmail routing
-    host: 'smtp.gmail.com',
-    port: 465,        // Switch to the secure SSL port
-    secure: true,     // True for port 465
-    auth: {
-        user: process.env.EMAIL_USER,    
-        pass: process.env.EMAIL_PASS     
-    },
-    tls: {
-        rejectUnauthorized: false
-    },
-    family: 4         // Force IPv4
-});
+// // ⚡ 3. BULLETPROOF EMAIL SETUP (Using Resend API)
+const { Resend } = require('resend');
 
-function sendEmail(to, subject, htmlContent) {
-    console.log(`\n[EMAIL] 🔄 Attempting to send email to: ${to}`);
+// Initialize Resend with the key from your Render environment variables
+const resend = new Resend(process.env.RESEND_API_KEY);
+
+async function sendEmail(to, subject, htmlContent) {
+    console.log(`\n[EMAIL] 🔄 Attempting to send email to: ${to} via Resend API`);
     
-    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-        console.error('[EMAIL] ❌ ABORTED: Missing EMAIL_USER or EMAIL_PASS in Render!');
+    if (!process.env.RESEND_API_KEY) {
+        console.error('[EMAIL] ❌ ABORTED: Missing RESEND_API_KEY in Render environment variables!');
         return; 
     }
 
     if (!to) return;
 
-    const mailOptions = { 
-        from: `"DeployDesk" <${process.env.EMAIL_USER}>`, 
-        to: to, 
-        subject: subject, 
-        html: htmlContent 
-    };
-    
-    transporter.sendMail(mailOptions, (error, info) => {
-        if (error) {
-            console.error('[EMAIL] ❌ GOOGLE BLOCKED IT. Error details:');
-            console.error(error.message);
-        } else {
-            console.log(`[EMAIL] ✅ SUCCESS: Delivered to ${to}`);
-        }
-    });
+    try {
+        const data = await resend.emails.send({
+            // NOTE: While testing, Resend only allows you to send emails FROM this specific testing address:
+            from: 'DeployDesk <onboarding@resend.dev>', 
+            // NOTE: While testing, you can only send emails TO the email address you signed up to Resend with!
+            to: to, 
+            subject: subject,
+            html: htmlContent
+        });
+
+        console.log(`[EMAIL] ✅ SUCCESS: API accepted the request! ID: ${data.id}`);
+    } catch (error) {
+        console.error('[EMAIL] ❌ FAILED: Resend API rejected the request.');
+        console.error(error);
+    }
 }
 
 // ⚡ 4. SECURE TiDB CONNECTION POOL (Crash-Proof)
@@ -115,12 +104,18 @@ db.on('error', (err) => {
 // ==========================================
 app.post('/api/login', (req, res) => {
     const { email, password } = req.body;
-    db.query('SELECT * FROM users WHERE email = ? AND password_hash = ?', [email, password], (err, results) => {
+    
+    // ⚡ FIX: Hash the incoming password so it matches the format stored in the database
+    const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
+
+    db.query('SELECT * FROM users WHERE email = ? AND password_hash = ?', [email, passwordHash], (err, results) => {
         if (err) { res.status(500).json({ success: false, message: 'Database error' }); return; }
         if (results.length > 0) {
             const user = results[0];
             res.json({ success: true, user: { id: user.id, email: user.email, name: user.full_name, role: user.role, contact: user.contact_number, position: user.position, avatar: user.avatar } });
-        } else { res.status(401).json({ success: false, message: 'Invalid email or password' }); }
+        } else { 
+            res.status(401).json({ success: false, message: 'Invalid email or password' }); 
+        }
     });
 });
 
