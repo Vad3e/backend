@@ -6,7 +6,8 @@ const path = require('path');
 const multer = require('multer');
 const fs = require('fs'); 
 const crypto = require('crypto');
-
+// Import your custom email worker
+const { sendEmail } = require('./mailer');
 
 // ⚡ 1. IMPORT THE DNS MODULE & GLOBALLY FORCE IPv4
 const dns = require('dns');
@@ -17,7 +18,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ⚡ 2. RESTORED: FILE UPLOAD SETUP (MULTER)
+// ⚡ 2. FILE UPLOAD SETUP (MULTER)
 const uploadDir = path.join(__dirname, 'public', 'uploads');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
@@ -30,77 +31,7 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
-// ⚡ 3. SMART HYBRID EMAIL SETUP (Nodemailer + Resend)
-const nodemailer = require('nodemailer');
-const { Resend } = require('resend');
-
-// Setup Resend (For when the app is on Render)
-const resend = new Resend(process.env.RESEND_API_KEY);
-
-// Setup Nodemailer (For when the app is running on your computer)
-const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-        user: process.env.EMAIL_USER,    
-        pass: process.env.EMAIL_PASS     
-    }
-});
-
-async function sendEmail(to, subject, htmlContent) {
-    if (!to) return;
-
-    // Render automatically sets a hidden environment variable called "RENDER" to 'true'.
-    // We check for it to know where the code is currently running!
-    const isRunningOnRender = process.env.RENDER === 'true';
-
-    if (isRunningOnRender) {
-        // ==========================================
-        // ☁️ RENDER MODE: Use Resend API
-        // ==========================================
-        console.log(`\n[EMAIL] ☁️ Server detected Render. Using Resend API for: ${to}`);
-        
-        if (!process.env.RESEND_API_KEY) {
-            console.error('[EMAIL] ❌ ABORTED: Missing RESEND_API_KEY in Render environment variables!');
-            return; 
-        }
-
-        try {
-            const { data, error } = await resend.emails.send({
-                from: 'DeployDesk <onboarding@resend.dev>', 
-                to: to, 
-                subject: subject,
-                html: htmlContent
-            });
-
-            if (error) {
-                console.error('[EMAIL] ❌ Resend API Error:', error.message);
-            } else {
-                console.log(`[EMAIL] ✅ Resend Success! ID: ${data.id}`);
-            }
-        } catch (err) {
-            console.error('[EMAIL] ❌ Resend Network Error:', err);
-        }
-        
-    } else {
-        // ==========================================
-        // 💻 LOCALHOST MODE: Use Nodemailer
-        // ==========================================
-        console.log(`\n[EMAIL] 💻 Server detected Localhost. Using Nodemailer for: ${to}`);
-        try {
-            await transporter.sendMail({ 
-                from: `"DeployDesk" <${process.env.EMAIL_USER}>`, 
-                to: to, 
-                subject: subject, 
-                html: htmlContent 
-            });
-            console.log(`[EMAIL] ✅ Nodemailer Success! Delivered to ${to}`);
-        } catch (error) {
-            console.error('[EMAIL] ❌ Nodemailer Failed:', error.message);
-        }
-    }
-}
-
-// ⚡ 4. SECURE TiDB CONNECTION POOL (Crash-Proof)
+// ⚡ 3. SECURE TiDB CONNECTION POOL (Crash-Proof)
 const db = mysql.createPool({
     host: process.env.DB_HOST || 'localhost', 
     user: process.env.DB_USER || 'root', 
@@ -192,14 +123,6 @@ app.post('/api/signup', (req, res) => {
 
                 console.log(`[SIGNUP] ✅ User saved to DB! New ID: ${result.insertId}`);
 
-                const welcomeHtml = `
-                    <div style="font-family: Arial; padding: 20px; color: #111;">
-                        <h2>Welcome to DeployDesk, ${fullName}!</h2>
-                        <p>Your account has been successfully created.</p>
-                        <p><strong>Role:</strong> ${role.toUpperCase()}</p>
-                    </div>`;
-                sendEmail(email, 'Welcome to DeployDesk!', welcomeHtml);
-
                 db.query('SELECT id, full_name as name, email, role, position, contact_number as contact, avatar FROM users WHERE id = ?', [result.insertId], (fetchErr, newUsers) => {
                     if (fetchErr) return res.status(500).json({ success: false, message: 'Account created but failed to load data.' });
                     console.log('[SIGNUP] 🎉 Sign up completely successful! Sending data to Netlify.');
@@ -220,8 +143,7 @@ app.post('/api/forgot-password', (req, res) => {
         const expires = Date.now() + 3600000; 
         db.query('UPDATE users SET reset_token = ?, reset_expires = ? WHERE email = ?', [token, expires, email], (err) => {
             if (err) { res.status(500).json({ success: false }); return; }
-            const resetLink = `http://localhost:3000/reset-password.html?token=${token}`;
-            sendEmail(email, 'DeployDesk: Password Reset Request', `<p>Click here: <a href="${resetLink}">Reset Password</a></p>`);
+            // Note: Token is saved to DB, ready for an external email service to pick up if needed.
             res.json({ success: true });
         });
     });
@@ -232,7 +154,6 @@ app.post('/api/reset-password', (req, res) => {
     db.query('SELECT id FROM users WHERE reset_token = ? AND reset_expires > ?', [token, Date.now()], (err, users) => {
         if (err || users.length === 0) { res.status(400).json({ success: false, message: 'Invalid or expired link.' }); return; }
         
-        // ⚡ FIX: Hash the new password before saving it so the login route doesn't break later
         const passwordHash = crypto.createHash('sha256').update(newPassword).digest('hex');
         
         db.query('UPDATE users SET password_hash = ?, reset_token = NULL, reset_expires = NULL WHERE id = ?', [passwordHash, users[0].id], (err) => {
@@ -271,7 +192,7 @@ app.post('/api/settings', (req, res) => {
 });
 
 // ==========================================
-// 2. EVENTS, PYTHON CCAA & EMAIL TRIGGERS
+// 2. EVENTS & PYTHON CCAA 
 // ==========================================
 app.get('/api/events', (req, res) => {
     db.query(`SELECT e.*, u.full_name as requester_name FROM event_requests e LEFT JOIN users u ON e.requester_id = u.id ORDER BY e.event_date ASC`, (err, results) => {
@@ -329,17 +250,11 @@ app.post('/api/events', upload.array('files', 10), (req, res) => {
             if (admins && admins.length > 0) {
                 admins.forEach(admin => {
                     db.query(`INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, 'warning', ?)`, [admin.id, `New Ticket: Event "${title}" needs your initial approval.`, eventId], () => {});
-                    if(admin.email) sendEmail(admin.email, 'DeployDesk: New Ticket Requires Approval', `<div style="font-family:Arial; color:#333;"><p>Hello Admin,</p><p>A new event request <b>"${title}"</b> has been submitted and requires your initial approval before the matching engine can run.</p></div>`);
                 });
             }
         });
 
         db.query('INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, ?, ?)', [safeRequesterId, `Ticket Submitted: Your request for "${title}" is awaiting initial admin review.`, 'info', eventId], () => {});
-        db.query('SELECT email, full_name FROM users WHERE id = ?', [safeRequesterId], (err, users) => {
-            if(users && users.length > 0) {
-                sendEmail(users[0].email, 'DeployDesk: Ticket Submitted', `<div style="font-family:Arial; color:#333;"><p>Hello ${users[0].full_name},</p><p>Your event request <b>"${title}"</b> has been successfully submitted and is now awaiting admin review.</p></div>`);
-            }
-        });
         
         res.json({ success: true });
     });
@@ -374,7 +289,6 @@ app.post('/api/events/roster', (req, res) => {
                     db.query(`SELECT id, email FROM users WHERE role = 'admin'`, (err, topAdmins) => {
                         if (topAdmins && topAdmins.length > 0) {
                             topAdmins.forEach(admin => db.query(`INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, 'warning', ?)`, [admin.id, `Action Required: Event ID ${eventId} has a roster ready for final approval.`, eventId], () => {}));
-                            sendEmail(topAdmins.map(a => a.email).join(','), `DeployDesk: Roster Ready for Review`, `<p>Event ID: ${eventId} needs your final deployment approval.</p>`);
                         }
                     });
                     res.json({ success: true, message: "Roster fully forwarded to Admins!" });
@@ -412,7 +326,6 @@ app.post('/api/events/status', (req, res) => {
                                 if (allocations) {
                                     allocations.forEach(a => {
                                         db.query("INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, 'info', ?)", [a.user_id, `⚡ CCAA Alert: You match the required schedule for '${ev.title}'. Check dashboard!`, eventId], () => {});
-                                        sendEmail(a.email, 'DeployDesk: New Coverage Match!', `<div style="font-family:Arial; color:#333;"><p>Hello ${a.full_name},</p><p>You match the schedule requirements for <b>"${ev.title}"</b>! Please log into your dashboard to accept or decline the task.</p></div>`);
                                     });
                                 }
                             });
@@ -437,27 +350,8 @@ app.post('/api/events/status', (req, res) => {
                     db.query(`UPDATE event_requests SET status = 'approved' WHERE id = ?`, [eventId], () => {
                         db.query(`SELECT u.full_name, u.email, ea.required_role, u.id as user_id FROM event_allocations ea JOIN users u ON ea.user_id = u.id WHERE ea.event_id = ? AND ea.status = 'assigned'`, [eventId], (err, memberDetails) => {
                             if (memberDetails) {
-                                let teamListHtml = '<ul style="background: #f4f4f4; padding: 15px; border-radius: 8px; list-style: none;">';
-                                
                                 memberDetails.forEach(m => { 
-                                    teamListHtml += `<li style="margin-bottom: 8px;">✅ <strong>${m.full_name}</strong> — ${m.required_role}</li>`; 
                                     db.query(`INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, 'success', ?)`, [m.user_id, `You have been officially ASSIGNED to cover an event!`, eventId]);
-                                    sendEmail(m.email, 'DeployDesk: Official Assignment', `<div style="font-family:Arial; color:#333;"><p>Hello ${m.full_name},</p><p>You have been officially <b>ASSIGNED</b> to cover <b>"${ev.title}"</b> as <b>${m.required_role}</b>. Please check your schedule.</p></div>`);
-                                });
-                                teamListHtml += '</ul>';
-
-                                db.query(`SELECT u.email, u.full_name, e.title, e.requester_id FROM event_requests e JOIN users u ON e.requester_id = u.id WHERE e.id = ?`, [eventId], (err, results) => {
-                                    if (results && results.length > 0) {
-                                        const requester = results[0];
-                                        sendEmail(requester.email, `DeployDesk: Event Approved (${requester.title})`, `
-                                            <div style="font-family: Arial, sans-serif; color: #333;">
-                                                <p>Hello <strong>${requester.full_name}</strong>,</p>
-                                                <p>Your event "<strong>${requester.title}</strong>" has been <span style="color: #1BA354; font-weight: bold;">OFFICIALLY APPROVED</span>.</p>
-                                                <p>The following coverage team has been assigned:</p>
-                                                ${teamListHtml}
-                                            </div>
-                                        `);
-                                    }
                                 });
                             }
                         });
