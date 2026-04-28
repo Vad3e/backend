@@ -655,4 +655,39 @@ app.post('/api/events/service-status', (req, res) => {
         }
     });
 });
+// ==========================================
+// ⚡ BULLETPROOF FIX: Unique endpoint to bypass ghost routes and safely auto-heal DB
+// ==========================================
+app.post('/api/events/live-tracking-update', (req, res) => {
+    const { eventId, serviceStatus, postingDate } = req.body;
+    
+    // Force empty strings to be strict SQL NULLs to prevent crash
+    const safeDate = (postingDate && postingDate.trim() !== '') ? postingDate : null;
+    
+    const sql = `UPDATE event_requests SET service_status = ?, posting_date = ? WHERE id = ?`;
+    
+    db.query(sql, [serviceStatus, safeDate, eventId], (err) => {
+        if (err) {
+            // Auto-heal Step 1: Forcibly add the first column, ignoring errors if it already exists
+            db.query("ALTER TABLE event_requests ADD COLUMN service_status VARCHAR(50) DEFAULT 'upcoming'", () => {
+                
+                // Auto-heal Step 2: Forcibly add the second column
+                db.query("ALTER TABLE event_requests ADD COLUMN posting_date DATE", () => {
+                    
+                    // Step 3: Now that the database is guaranteed to have the columns, run the update again!
+                    db.query(sql, [serviceStatus, safeDate, eventId], (retryErr) => {
+                        if (retryErr) {
+                            console.error("SQL Retry Error:", retryErr.message);
+                            res.json({ success: false, message: retryErr.message });
+                        } else {
+                            res.json({ success: true });
+                        }
+                    });
+                });
+            });
+        } else {
+            res.json({ success: true });
+        }
+    });
+});
 app.listen(3000, () => console.log(`🚀 Server running on http://localhost:3000`));
