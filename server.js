@@ -610,4 +610,49 @@ app.post('/api/events/service-status', (req, res) => {
         }
     });
 });
+// ==========================================
+// ⚡ FIX: CORRECTED SERVICE TRACKING ROUTES
+// ==========================================
+
+// Fetch member tasks with the correct table names (event_allocations & event_requests)
+app.get('/api/allocations/member/:userId', (req, res) => {
+    const sql = `
+        SELECT a.*, e.title, e.event_date, e.start_time, e.venue, e.status as event_status, 
+               e.service_status, e.posting_date 
+        FROM event_allocations a 
+        JOIN event_requests e ON a.event_id = e.id 
+        WHERE a.user_id = ?`;
+        
+    db.query(sql, [req.params.userId], (err, results) => {
+        res.json({ success: !err, tasks: results || [] });
+    });
+});
+
+// Save live status updates to the correct table (event_requests)
+app.post('/api/events/service-status', (req, res) => {
+    const { eventId, serviceStatus, postingDate } = req.body;
+    
+    // Force empty strings to be strict SQL NULLs to prevent crash
+    const safeDate = (postingDate && postingDate.trim() !== '') ? postingDate : null;
+    
+    const sql = `UPDATE event_requests SET service_status = ?, posting_date = ? WHERE id = ?`;
+    db.query(sql, [serviceStatus, safeDate, eventId], (err) => {
+        if (err) {
+            // Auto-heal the database if the columns don't exist yet
+            if (err.code === 'ER_BAD_FIELD_ERROR') {
+                db.query(`ALTER TABLE event_requests ADD COLUMN service_status VARCHAR(50) DEFAULT 'upcoming', ADD COLUMN posting_date DATE`, (alterErr) => {
+                    if (alterErr) return res.json({success: false, message: 'Failed to create DB columns'});
+                    db.query(sql, [serviceStatus, safeDate, eventId], (retryErr) => {
+                        res.json({success: !retryErr, message: retryErr ? retryErr.message : ''});
+                    });
+                });
+            } else {
+                console.error("SQL Error:", err.message);
+                res.json({success: false, message: err.message});
+            }
+        } else {
+            res.json({ success: true });
+        }
+    });
+});
 app.listen(3000, () => console.log(`🚀 Server running on http://localhost:3000`));
