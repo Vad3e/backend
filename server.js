@@ -661,20 +661,14 @@ app.post('/api/events/service-status', (req, res) => {
 app.post('/api/events/live-tracking-update', (req, res) => {
     const { eventId, serviceStatus, postingDate } = req.body;
     
-    // Force empty strings to be strict SQL NULLs to prevent crash
     const safeDate = (postingDate && postingDate.trim() !== '') ? postingDate : null;
-    
     const sql = `UPDATE event_requests SET service_status = ?, posting_date = ? WHERE id = ?`;
     
     db.query(sql, [serviceStatus, safeDate, eventId], (err) => {
         if (err) {
-            // Auto-heal Step 1: Forcibly add the first column, ignoring errors if it already exists
-            db.query("ALTER TABLE event_requests ADD COLUMN service_status VARCHAR(50) DEFAULT 'upcoming'", () => {
-                
-                // Auto-heal Step 2: Forcibly add the second column
+            // CHANGED: Use DEFAULT NULL instead of DEFAULT 'upcoming'
+            db.query("ALTER TABLE event_requests ADD COLUMN service_status VARCHAR(50) DEFAULT NULL", () => {
                 db.query("ALTER TABLE event_requests ADD COLUMN posting_date DATE", () => {
-                    
-                    // Step 3: Now that the database is guaranteed to have the columns, run the update again!
                     db.query(sql, [serviceStatus, safeDate, eventId], (retryErr) => {
                         if (retryErr) {
                             console.error("SQL Retry Error:", retryErr.message);
