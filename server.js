@@ -548,4 +548,27 @@ app.get('/api/notifications/:userId', (req, res) => { db.query('SELECT * FROM no
 app.post('/api/notifications/read', (req, res) => { db.query(`UPDATE notifications SET is_read = TRUE WHERE id = ?`, [req.body.notifId], (err) => res.json({ success: !err })); });
 app.post('/api/notifications/read-all', (req, res) => { db.query(`UPDATE notifications SET is_read = TRUE WHERE user_id = ?`, [req.body.userId], (err) => res.json({ success: !err })); });
 
+// ⚡ FIX: Endpoint to save live Service Request Tracking updates
+app.post('/api/events/service-status', (req, res) => {
+    const { eventId, serviceStatus, postingDate } = req.body;
+    
+    const sql = `UPDATE events SET service_status = ?, posting_date = ? WHERE id = ?`;
+    db.query(sql, [serviceStatus, postingDate || null, eventId], (err) => {
+        if (err) {
+            // Auto-heal: If columns don't exist yet, create them on the fly and retry!
+            if (err.code === 'ER_BAD_FIELD_ERROR') {
+                db.query(`ALTER TABLE events ADD COLUMN service_status VARCHAR(50) DEFAULT 'upcoming', ADD COLUMN posting_date DATE`, (alterErr) => {
+                    if (alterErr) return res.json({success: false, message: 'Database Error'});
+                    db.query(sql, [serviceStatus, postingDate || null, eventId], (retryErr) => {
+                        res.json({success: !retryErr});
+                    });
+                });
+            } else {
+                res.json({success: false});
+            }
+        } else {
+            res.json({ success: true });
+        }
+    });
+});
 app.listen(3000, () => console.log(`🚀 Server running on http://localhost:3000`));
