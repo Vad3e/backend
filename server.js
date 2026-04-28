@@ -149,13 +149,27 @@ app.post('/api/forgot-password', (req, res) => {
         const expires = Date.now() + 3600000; 
         db.query('UPDATE users SET reset_token = ?, reset_expires = ? WHERE email = ?', [token, expires, email], (err) => {
             if (err) { res.status(500).json({ success: false }); return; }
-            const resetLink = `http://localhost:3000/reset-password.html?token=${token}`;
-            sendEmail(email, 'DeployDesk: Password Reset Request', `<p>Click here: <a href="${resetLink}">Reset Password</a></p>`);
+            
+            const resetLink = `https://deploydesk.netlify.app/confirmationpass.html?token=${token}`;
+            
+            // ⚡ FIX: Upgraded the email template to include a clean, green button
+            const emailHtml = `
+                <div style="font-family: 'Arial', sans-serif; color: #111; max-width: 500px; padding: 20px; border: 1px solid #e0e0e0; border-radius: 12px;">
+                    <h2 style="color: #1BA354; margin-top: 0;">Password Reset Request</h2>
+                    <p style="font-size: 15px; line-height: 1.6;">Hello,</p>
+                    <p style="font-size: 15px; line-height: 1.6;">You recently requested to reset your password for your DeployDesk account. Click the button below to securely set a new password.</p>
+                    <div style="text-align: center; margin: 30px 0;">
+                        <a href="${resetLink}" style="display: inline-block; padding: 14px 28px; background-color: #1BA354; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px;">Reset My Password</a>
+                    </div>
+                    <p style="font-size: 13px; color: #888; margin-bottom: 0;">If you did not request a password reset, you can safely ignore this email. This link will expire in 1 hour.</p>
+                </div>
+            `;
+            
+            sendEmail(email, 'DeployDesk: Password Reset Request', emailHtml);
             res.json({ success: true });
         });
     });
 });
-
 app.post('/api/reset-password', (req, res) => {
     const { token, newPassword } = req.body;
     db.query('SELECT id FROM users WHERE reset_token = ? AND reset_expires > ?', [token, Date.now()], (err, users) => {
