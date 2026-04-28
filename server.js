@@ -72,10 +72,14 @@ db.on('error', (err) => {
 // ==========================================
 // 1. AUTH & PASSWORD RESET ENDPOINTS
 // ==========================================
+// ==========================================
+// 1. AUTH & PASSWORD RESET ENDPOINTS
+// ==========================================
 app.post('/api/login', (req, res) => {
     const { email, password } = req.body;
     
-    db.query('SELECT * FROM users WHERE email = ?', [email], (err, results) => {
+    // ⚡ FIX: "ORDER BY id DESC LIMIT 1" ensures it always logs you into the newest, correct account and ignores old ghost duplicates.
+    db.query('SELECT * FROM users WHERE email = ? ORDER BY id DESC LIMIT 1', [email], (err, results) => {
         if (err) { res.status(500).json({ success: false, message: 'Database error' }); return; }
         
         if (results.length > 0) {
@@ -97,6 +101,7 @@ app.post('/api/login', (req, res) => {
 });
 
 app.post('/api/signup', (req, res) => {
+    // ... (Keep your existing /api/signup code here exactly as it is) ...
     console.log('\n[SIGNUP] 🔄 Received new signup request!');
     const { email, password, fullName, contact, role, memberPosition } = req.body;
 
@@ -119,7 +124,6 @@ app.post('/api/signup', (req, res) => {
 
                 console.log(`[SIGNUP] ✅ User saved to DB! New ID: ${result.insertId}`);
 
-                // ✉️ TRIGGER 1: Creating an Account
                 const welcomeHtml = `
                     <div style="font-family: Arial; padding: 20px; color: #111;">
                         <h2>Welcome to DeployDesk, ${fullName}!</h2>
@@ -147,12 +151,13 @@ app.post('/api/forgot-password', (req, res) => {
         if (err || users.length === 0) { res.json({ success: true }); return; } 
         const token = crypto.randomBytes(32).toString('hex');
         const expires = Date.now() + 3600000; 
+        
+        // ⚡ FIX: Send token to ALL accounts matching the email
         db.query('UPDATE users SET reset_token = ?, reset_expires = ? WHERE email = ?', [token, expires, email], (err) => {
             if (err) { res.status(500).json({ success: false }); return; }
             
             const resetLink = `https://deploydesk.netlify.app/confirmationpass.html?token=${token}`;
             
-            // ⚡ FIX: Upgraded the email template to include a clean, green button
             const emailHtml = `
                 <div style="font-family: 'Arial', sans-serif; color: #111; max-width: 500px; padding: 20px; border: 1px solid #e0e0e0; border-radius: 12px;">
                     <h2 style="color: #1BA354; margin-top: 0;">Password Reset Request</h2>
@@ -170,17 +175,23 @@ app.post('/api/forgot-password', (req, res) => {
         });
     });
 });
+
 app.post('/api/reset-password', (req, res) => {
     const { token, newPassword } = req.body;
-    db.query('SELECT id FROM users WHERE reset_token = ? AND reset_expires > ?', [token, Date.now()], (err, users) => {
+    
+    // ⚡ FIX: Grab the email linked to the token to safely wipe out all duplicates
+    db.query('SELECT email FROM users WHERE reset_token = ? AND reset_expires > ? LIMIT 1', [token, Date.now()], (err, users) => {
         if (err || users.length === 0) { res.status(400).json({ success: false, message: 'Invalid or expired link.' }); return; }
+        
         const passwordHash = crypto.createHash('sha256').update(newPassword).digest('hex');
-        db.query('UPDATE users SET password_hash = ?, reset_token = NULL, reset_expires = NULL WHERE id = ?', [passwordHash, users[0].id], (err) => {
+        const userEmail = users[0].email;
+        
+        // ⚡ FIX: Forcefully update the password for EVERY row matching this email
+        db.query('UPDATE users SET password_hash = ?, reset_token = NULL, reset_expires = NULL WHERE email = ?', [passwordHash, userEmail], (err) => {
             res.json({ success: !err });
         });
     });
 });
-
 // ==========================================
 // ⚡ GLOBAL SYSTEM SETTINGS ENDPOINTS
 // ==========================================
