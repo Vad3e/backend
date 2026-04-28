@@ -571,4 +571,43 @@ app.post('/api/events/service-status', (req, res) => {
         }
     });
 });
+// ⚡ FIX 1: Make sure the database actually FETCHES the service_status columns for the member!
+app.get('/api/allocations/member/:id', (req, res) => {
+    const sql = `
+        SELECT a.*, e.title, e.event_date, e.start_time, e.venue, e.status as event_status, 
+               e.service_status, e.posting_date 
+        FROM personnel_allocations a 
+        JOIN events e ON a.event_id = e.id 
+        WHERE a.user_id = ?`;
+        
+    db.query(sql, [req.params.id], (err, results) => {
+        res.json({ success: !err, tasks: results || [] });
+    });
+});
+
+// ⚡ FIX 2: Bulletproof the Save Endpoint to handle MySQL strict mode safely
+app.post('/api/events/service-status', (req, res) => {
+    const { eventId, serviceStatus, postingDate } = req.body;
+    
+    // Force empty strings to be strict SQL NULLs to prevent crash
+    const safeDate = (postingDate && postingDate.trim() !== '') ? postingDate : null;
+    
+    const sql = `UPDATE events SET service_status = ?, posting_date = ? WHERE id = ?`;
+    db.query(sql, [serviceStatus, safeDate, eventId], (err) => {
+        if (err) {
+            if (err.code === 'ER_BAD_FIELD_ERROR') {
+                db.query(`ALTER TABLE events ADD COLUMN service_status VARCHAR(50) DEFAULT 'upcoming', ADD COLUMN posting_date DATE`, (alterErr) => {
+                    if (alterErr) return res.json({success: false, message: 'Failed to create DB columns'});
+                    db.query(sql, [serviceStatus, safeDate, eventId], (retryErr) => {
+                        res.json({success: !retryErr, message: retryErr ? retryErr.message : ''});
+                    });
+                });
+            } else {
+                res.json({success: false, message: err.message});
+            }
+        } else {
+            res.json({ success: true });
+        }
+    });
+});
 app.listen(3000, () => console.log(`🚀 Server running on http://localhost:3000`));
