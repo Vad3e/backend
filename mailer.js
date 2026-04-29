@@ -3,16 +3,21 @@ const nodemailer = require('nodemailer');
 
 // Set up the Nodemailer transporter using your environment variables
 const transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',  // Use host instead of service: 'gmail'
-    port: 465,               // Port 465 for secure, 587 for unsecure
-    secure: true,            // true for 465, false for other ports
+    // 1. MUST use host. Delete `service: 'gmail'` completely!
+    host: 'smtp.gmail.com', 
+    port: 465,
+    secure: true,
     auth: {
-        user: process.env.EMAIL_USER, 
-        pass: process.env.EMAIL_PASS  
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS
     },
-    family: 4                // ⚡ THIS IS THE FIX: Forces IPv4 instead of IPv6
+    // 2. The Nuclear IPv4 overrides
+    family: 4,               // Tells Node to prefer IPv4
+    localAddress: '0.0.0.0', // Forces the connection out through an IPv4 interface
+    tls: {
+        rejectUnauthorized: false // Prevents strict SSL rejections on free hosts
+    }
 });
-
 /**
  * Reusable function to send emails from anywhere in your app.
  * @param {string} to - The recipient's email address

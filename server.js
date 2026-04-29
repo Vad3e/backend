@@ -658,29 +658,37 @@ app.post('/api/events/service-status', (req, res) => {
 // ==========================================
 // ⚡ BULLETPROOF FIX: Unique endpoint to bypass ghost routes and safely auto-heal DB
 // ==========================================
+// ⚡ BULLETPROOF FIX: Unique endpoint to bypass ghost routes and safely auto-heal DB
 app.post('/api/events/live-tracking-update', (req, res) => {
     const { eventId, serviceStatus, postingDate } = req.body;
     
+    // Force empty strings to be strict SQL NULLs to prevent crash
     const safeDate = (postingDate && postingDate.trim() !== '') ? postingDate : null;
+    const safeStatus = (serviceStatus && serviceStatus.trim() !== '') ? serviceStatus.trim() : null;
+    
     const sql = `UPDATE event_requests SET service_status = ?, posting_date = ? WHERE id = ?`;
     
-    db.query(sql, [serviceStatus, safeDate, eventId], (err) => {
+    db.query(sql, [safeStatus, safeDate, eventId], (err, result) => {
         if (err) {
-            // CHANGED: Use DEFAULT NULL instead of DEFAULT 'upcoming'
-            db.query("ALTER TABLE event_requests ADD COLUMN service_status VARCHAR(50) DEFAULT NULL", () => {
-                db.query("ALTER TABLE event_requests ADD COLUMN posting_date DATE", () => {
-                    db.query(sql, [serviceStatus, safeDate, eventId], (retryErr) => {
-                        if (retryErr) {
-                            console.error("SQL Retry Error:", retryErr.message);
-                            res.json({ success: false, message: retryErr.message });
-                        } else {
-                            res.json({ success: true });
-                        }
+            // Auto-heal if the columns don't exist
+            if (err.code === 'ER_BAD_FIELD_ERROR') {
+                db.query("ALTER TABLE event_requests ADD COLUMN service_status VARCHAR(50) DEFAULT NULL", () => {
+                    db.query("ALTER TABLE event_requests ADD COLUMN posting_date DATE", () => {
+                        db.query(sql, [safeStatus, safeDate, eventId], (retryErr) => {
+                            res.json({ success: !retryErr, message: retryErr ? retryErr.message : '' });
+                        });
                     });
                 });
-            });
+            } else {
+                res.json({ success: false, message: "DB Error: " + err.message });
+            }
         } else {
-            res.json({ success: true });
+            // ⚡ Verify it ACTUALLY updated a row
+            if (result.affectedRows === 0) {
+                res.json({ success: false, message: "No matching event found to update." });
+            } else {
+                res.json({ success: true });
+            }
         }
     });
 });
