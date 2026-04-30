@@ -542,7 +542,21 @@ app.post('/api/users/remove', (req, res) => {
         });
     });
 });
+app.post('/api/events/live-tracking-update', (req, res) => {
+    const { eventId, serviceStatus, postingDate } = req.body;
 
+    db.query(
+        `UPDATE event_requests SET service_status = ?, posting_date = ? WHERE id = ?`, 
+        [serviceStatus, postingDate || null, eventId], 
+        (err, result) => {
+            if (err) {
+                console.error('❌ Update Tracking Error:', err);
+                return res.status(500).json({ success: false, message: 'Database error' });
+            }
+            res.json({ success: true, message: 'Tracking status updated successfully!' });
+        }
+    );
+});
 // ==========================================
 // 4. UTILS, SCHEDULE, AND NOTIFICATIONS
 // ==========================================
