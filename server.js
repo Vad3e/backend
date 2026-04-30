@@ -484,8 +484,15 @@ app.post('/api/events/status', (req, res) => {
 // 3. ALLOCATIONS & ADMIN DIRECTORY
 // ==========================================
 app.get('/api/allocations/member/:userId', (req, res) => {
-    db.query(`SELECT a.*, e.title, e.event_date, e.start_time, e.venue, e.status as event_status FROM event_allocations a JOIN event_requests e ON a.event_id = e.id WHERE a.user_id = ?`, [req.params.userId], (err, results) => {
-        res.json({ success: !err, tasks: results });
+    const sql = `
+        SELECT a.*, e.title, e.event_date, e.start_time, e.venue, e.status as event_status, 
+               e.service_status, e.posting_date 
+        FROM event_allocations a 
+        JOIN event_requests e ON a.event_id = e.id 
+        WHERE a.user_id = ?`;
+        
+    db.query(sql, [req.params.userId], (err, results) => {
+        res.json({ success: !err, tasks: results || [] });
     });
 });
 app.post('/api/allocations/accept', (req, res) => { db.query(`UPDATE event_allocations SET status = 'accepted' WHERE id = ?`, [req.body.allocationId], (err) => res.json({ success: !err })); });
@@ -566,39 +573,7 @@ app.get('/api/notifications/:userId', (req, res) => { db.query('SELECT * FROM no
 app.post('/api/notifications/read', (req, res) => { db.query(`UPDATE notifications SET is_read = TRUE WHERE id = ?`, [req.body.notifId], (err) => res.json({ success: !err })); });
 app.post('/api/notifications/read-all', (req, res) => { db.query(`UPDATE notifications SET is_read = TRUE WHERE user_id = ?`, [req.body.userId], (err) => res.json({ success: !err })); });
 
-// ⚡ BULLETPROOF FIX: Unique endpoint to bypass ghost routes and safely auto-heal DB
-app.post('/api/events/live-tracking-update', (req, res) => {
-    const { eventId, serviceStatus, postingDate } = req.body;
-    
-    // Force empty strings to be strict SQL NULLs to prevent crash
-    const safeDate = (postingDate && postingDate.trim() !== '') ? postingDate : null;
-    const safeStatus = (serviceStatus && serviceStatus.trim() !== '') ? serviceStatus.trim() : null;
-    
-    const sql = `UPDATE event_requests SET service_status = ?, posting_date = ? WHERE id = ?`;
-    
-    db.query(sql, [safeStatus, safeDate, eventId], (err, result) => {
-        if (err) {
-            // Auto-heal if the columns don't exist
-            if (err.code === 'ER_BAD_FIELD_ERROR') {
-                db.query("ALTER TABLE event_requests ADD COLUMN service_status VARCHAR(50) DEFAULT NULL", () => {
-                    db.query("ALTER TABLE event_requests ADD COLUMN posting_date DATE", () => {
-                        db.query(sql, [safeStatus, safeDate, eventId], (retryErr) => {
-                            res.json({ success: !retryErr, message: retryErr ? retryErr.message : '' });
-                        });
-                    });
-                });
-            } else {
-                res.json({ success: false, message: "DB Error: " + err.message });
-            }
-        } else {
-            // ⚡ Verify it ACTUALLY updated a row
-            if (result.affectedRows === 0) {
-                res.json({ success: false, message: "No matching event found to update." });
-            } else {
-                res.json({ success: true });
-            }
-        }
-    });
-});
+
+
 
 app.listen(3000, () => console.log(`🚀 Server running on http://localhost:3000`));
