@@ -7,6 +7,10 @@ const multer = require('multer');
 const fs = require('fs'); 
 const crypto = require('crypto');
 
+// ⚡ ADDED: JSON Web Token for Secure Sessions
+const jwt = require('jsonwebtoken');
+const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-deploydesk-key-2026';
+
 // Import your custom email worker
 const { sendEmail } = require('./mailer');
 
@@ -72,13 +76,10 @@ db.on('error', (err) => {
 // ==========================================
 // 1. AUTH & PASSWORD RESET ENDPOINTS
 // ==========================================
-// ==========================================
-// 1. AUTH & PASSWORD RESET ENDPOINTS
-// ==========================================
 app.post('/api/login', (req, res) => {
     const { email, password } = req.body;
     
-    // ⚡ FIX: "ORDER BY id DESC LIMIT 1" ensures it always logs you into the newest, correct account and ignores old ghost duplicates.
+    // ⚡ FIX: "ORDER BY id DESC LIMIT 1" ensures it always logs you into the newest, correct account
     db.query('SELECT * FROM users WHERE email = ? ORDER BY id DESC LIMIT 1', [email], (err, results) => {
         if (err) { res.status(500).json({ success: false, message: 'Database error' }); return; }
         
@@ -90,7 +91,19 @@ app.post('/api/login', (req, res) => {
                 if (user.password_hash === password) {
                     db.query('UPDATE users SET password_hash = ? WHERE id = ?', [passwordHash, user.id]);
                 }
-                res.json({ success: true, user: { id: user.id, email: user.email, name: user.full_name, role: user.role, contact: user.contact_number, position: user.position, avatar: user.avatar } });
+
+                // ⚡ NEW: Generate Secure JWT Token
+                const token = jwt.sign(
+                    { id: user.id, role: user.role },
+                    JWT_SECRET,
+                    { expiresIn: '7d' } // Token lasts 7 days
+                );
+
+                res.json({ 
+                    success: true, 
+                    token: token, // Send token to frontend
+                    user: { id: user.id, email: user.email, name: user.full_name, role: user.role, contact: user.contact_number, position: user.position, avatar: user.avatar } 
+                });
             } else {
                 res.status(401).json({ success: false, message: 'Invalid email or password' }); 
             }
@@ -101,7 +114,6 @@ app.post('/api/login', (req, res) => {
 });
 
 app.post('/api/signup', (req, res) => {
-    // ... (Keep your existing /api/signup code here exactly as it is) ...
     console.log('\n[SIGNUP] 🔄 Received new signup request!');
     const { email, password, fullName, contact, role, memberPosition } = req.body;
 
@@ -136,7 +148,15 @@ app.post('/api/signup', (req, res) => {
                 db.query('SELECT id, full_name as name, email, role, position, contact_number as contact, avatar FROM users WHERE id = ?', [result.insertId], (fetchErr, newUsers) => {
                     if (fetchErr) return res.status(500).json({ success: false, message: 'Account created but failed to load data.' });
                     console.log('[SIGNUP] 🎉 Sign up completely successful! Sending data to frontend.');
-                    res.json({ success: true, user: newUsers[0] });
+
+                    // ⚡ NEW: Generate Secure JWT Token for new user
+                    const token = jwt.sign(
+                        { id: newUsers[0].id, role: newUsers[0].role },
+                        JWT_SECRET,
+                        { expiresIn: '7d' }
+                    );
+
+                    res.json({ success: true, token: token, user: newUsers[0] });
                 });
             });
         });
@@ -152,7 +172,6 @@ app.post('/api/forgot-password', (req, res) => {
         const token = crypto.randomBytes(32).toString('hex');
         const expires = Date.now() + 3600000; 
         
-        // ⚡ FIX: Send token to ALL accounts matching the email
         db.query('UPDATE users SET reset_token = ?, reset_expires = ? WHERE email = ?', [token, expires, email], (err) => {
             if (err) { res.status(500).json({ success: false }); return; }
             
@@ -179,19 +198,18 @@ app.post('/api/forgot-password', (req, res) => {
 app.post('/api/reset-password', (req, res) => {
     const { token, newPassword } = req.body;
     
-    // ⚡ FIX: Grab the email linked to the token to safely wipe out all duplicates
     db.query('SELECT email FROM users WHERE reset_token = ? AND reset_expires > ? LIMIT 1', [token, Date.now()], (err, users) => {
         if (err || users.length === 0) { res.status(400).json({ success: false, message: 'Invalid or expired link.' }); return; }
         
         const passwordHash = crypto.createHash('sha256').update(newPassword).digest('hex');
         const userEmail = users[0].email;
         
-        // ⚡ FIX: Forcefully update the password for EVERY row matching this email
         db.query('UPDATE users SET password_hash = ?, reset_token = NULL, reset_expires = NULL WHERE email = ?', [passwordHash, userEmail], (err) => {
             res.json({ success: !err });
         });
     });
 });
+
 // ==========================================
 // ⚡ GLOBAL SYSTEM SETTINGS ENDPOINTS
 // ==========================================
@@ -548,116 +566,6 @@ app.get('/api/notifications/:userId', (req, res) => { db.query('SELECT * FROM no
 app.post('/api/notifications/read', (req, res) => { db.query(`UPDATE notifications SET is_read = TRUE WHERE id = ?`, [req.body.notifId], (err) => res.json({ success: !err })); });
 app.post('/api/notifications/read-all', (req, res) => { db.query(`UPDATE notifications SET is_read = TRUE WHERE user_id = ?`, [req.body.userId], (err) => res.json({ success: !err })); });
 
-// ⚡ FIX: Endpoint to save live Service Request Tracking updates
-app.post('/api/events/service-status', (req, res) => {
-    const { eventId, serviceStatus, postingDate } = req.body;
-    
-    const sql = `UPDATE events SET service_status = ?, posting_date = ? WHERE id = ?`;
-    db.query(sql, [serviceStatus, postingDate || null, eventId], (err) => {
-        if (err) {
-            // Auto-heal: If columns don't exist yet, create them on the fly and retry!
-            if (err.code === 'ER_BAD_FIELD_ERROR') {
-                db.query(`ALTER TABLE events ADD COLUMN service_status VARCHAR(50) DEFAULT 'upcoming', ADD COLUMN posting_date DATE`, (alterErr) => {
-                    if (alterErr) return res.json({success: false, message: 'Database Error'});
-                    db.query(sql, [serviceStatus, postingDate || null, eventId], (retryErr) => {
-                        res.json({success: !retryErr});
-                    });
-                });
-            } else {
-                res.json({success: false});
-            }
-        } else {
-            res.json({ success: true });
-        }
-    });
-});
-// ⚡ FIX 1: Make sure the database actually FETCHES the service_status columns for the member!
-app.get('/api/allocations/member/:id', (req, res) => {
-    const sql = `
-        SELECT a.*, e.title, e.event_date, e.start_time, e.venue, e.status as event_status, 
-               e.service_status, e.posting_date 
-        FROM personnel_allocations a 
-        JOIN events e ON a.event_id = e.id 
-        WHERE a.user_id = ?`;
-        
-    db.query(sql, [req.params.id], (err, results) => {
-        res.json({ success: !err, tasks: results || [] });
-    });
-});
-
-// ⚡ FIX 2: Bulletproof the Save Endpoint to handle MySQL strict mode safely
-app.post('/api/events/service-status', (req, res) => {
-    const { eventId, serviceStatus, postingDate } = req.body;
-    
-    // Force empty strings to be strict SQL NULLs to prevent crash
-    const safeDate = (postingDate && postingDate.trim() !== '') ? postingDate : null;
-    
-    const sql = `UPDATE events SET service_status = ?, posting_date = ? WHERE id = ?`;
-    db.query(sql, [serviceStatus, safeDate, eventId], (err) => {
-        if (err) {
-            if (err.code === 'ER_BAD_FIELD_ERROR') {
-                db.query(`ALTER TABLE events ADD COLUMN service_status VARCHAR(50) DEFAULT 'upcoming', ADD COLUMN posting_date DATE`, (alterErr) => {
-                    if (alterErr) return res.json({success: false, message: 'Failed to create DB columns'});
-                    db.query(sql, [serviceStatus, safeDate, eventId], (retryErr) => {
-                        res.json({success: !retryErr, message: retryErr ? retryErr.message : ''});
-                    });
-                });
-            } else {
-                res.json({success: false, message: err.message});
-            }
-        } else {
-            res.json({ success: true });
-        }
-    });
-});
-// ==========================================
-// ⚡ FIX: CORRECTED SERVICE TRACKING ROUTES
-// ==========================================
-
-// Fetch member tasks with the correct table names (event_allocations & event_requests)
-app.get('/api/allocations/member/:userId', (req, res) => {
-    const sql = `
-        SELECT a.*, e.title, e.event_date, e.start_time, e.venue, e.status as event_status, 
-               e.service_status, e.posting_date 
-        FROM event_allocations a 
-        JOIN event_requests e ON a.event_id = e.id 
-        WHERE a.user_id = ?`;
-        
-    db.query(sql, [req.params.userId], (err, results) => {
-        res.json({ success: !err, tasks: results || [] });
-    });
-});
-
-// Save live status updates to the correct table (event_requests)
-app.post('/api/events/service-status', (req, res) => {
-    const { eventId, serviceStatus, postingDate } = req.body;
-    
-    // Force empty strings to be strict SQL NULLs to prevent crash
-    const safeDate = (postingDate && postingDate.trim() !== '') ? postingDate : null;
-    
-    const sql = `UPDATE event_requests SET service_status = ?, posting_date = ? WHERE id = ?`;
-    db.query(sql, [serviceStatus, safeDate, eventId], (err) => {
-        if (err) {
-            // Auto-heal the database if the columns don't exist yet
-            if (err.code === 'ER_BAD_FIELD_ERROR') {
-                db.query(`ALTER TABLE event_requests ADD COLUMN service_status VARCHAR(50) DEFAULT 'upcoming', ADD COLUMN posting_date DATE`, (alterErr) => {
-                    if (alterErr) return res.json({success: false, message: 'Failed to create DB columns'});
-                    db.query(sql, [serviceStatus, safeDate, eventId], (retryErr) => {
-                        res.json({success: !retryErr, message: retryErr ? retryErr.message : ''});
-                    });
-                });
-            } else {
-                console.error("SQL Error:", err.message);
-                res.json({success: false, message: err.message});
-            }
-        } else {
-            res.json({ success: true });
-        }
-    });
-});
-// ==========================================
-// ⚡ BULLETPROOF FIX: Unique endpoint to bypass ghost routes and safely auto-heal DB
-// ==========================================
 // ⚡ BULLETPROOF FIX: Unique endpoint to bypass ghost routes and safely auto-heal DB
 app.post('/api/events/live-tracking-update', (req, res) => {
     const { eventId, serviceStatus, postingDate } = req.body;
@@ -692,4 +600,5 @@ app.post('/api/events/live-tracking-update', (req, res) => {
         }
     });
 });
+
 app.listen(3000, () => console.log(`🚀 Server running on http://localhost:3000`));
