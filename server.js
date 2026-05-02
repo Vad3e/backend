@@ -668,4 +668,6 @@ app.post('/api/notifications/read-all', (req, res) => { db.query(`UPDATE notific
 
 
 
-app.listen(3000, () => console.log(`🚀 Server running on http://localhost:3000`));
+// Let Render decide the port, but fallback to 3000 for local testing
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
