@@ -24,7 +24,7 @@ transporter.verify((error, success) => {
 // 3. Create a reusable function to send emails
 const sendEmail = (toEmail, subject, htmlContent) => {
     const mailOptions = {
-        from: '"DeployDesk Notifications" <your_verified_sender@example.com>', // Replace with your verified Brevo sender email
+        from: '"DeployDesk Notifications" <deploydesk@gmail.com>', // Replace with your verified Brevo sender email
         to: toEmail,
         subject: subject,
         html: htmlContent
