@@ -603,6 +603,63 @@ app.post('/api/schedule', (req, res) => {
         });
     });
 });
+
+app.get('/api/check-availability', (req, res) => {
+    const { date, start, end } = req.query;
+    
+    // 1. Calculate the UI Day (Monday = 0, Tuesday = 1... Saturday = 5)
+    const d = new Date(date);
+    let uiDay = d.getDay() - 1; 
+    if (uiDay < 0) uiDay = 6; // Catch Sunday
+
+    // 2. Parse the hours the requester needs
+    const startHour = parseInt(start.split(':')[0]);
+    const endHour = parseInt(end.split(':')[0]);
+    const requiredHours = [];
+    for(let h = startHour; h < endHour; h++) requiredHours.push(h);
+
+    // 3. Fetch all eligible members
+    db.query('SELECT id, position FROM users WHERE role IN ("member", "administrative") AND position IS NOT NULL', (err, users) => {
+        if (err) return res.status(500).json({ success: false });
+
+        // 4. Check their weekly schedules for conflicts on that specific day
+        db.query('SELECT user_id, hour_of_day FROM user_schedules WHERE day_of_week = ?', [uiDay], (err, schedules) => {
+            
+            // 5. Check if they are already assigned to an approved event on that exact date
+            db.query(`SELECT a.user_id FROM event_allocations a JOIN event_requests e ON a.event_id = e.id WHERE e.event_date = ? AND a.status IN ('assigned', 'accepted')`, [date], (err, allocations) => {
+                
+                const busyUserIds = new Set();
+
+                // Rule 1: Eliminate members who marked their schedule as "Busy" during these hours
+                if (schedules) {
+                    schedules.forEach(row => {
+                        if (requiredHours.includes(row.hour_of_day)) {
+                            busyUserIds.add(row.user_id);
+                        }
+                    });
+                }
+
+                // Rule 2: Eliminate members already assigned to cover another event that day
+                if (allocations) {
+                    allocations.forEach(row => {
+                        busyUserIds.add(row.user_id);
+                    });
+                }
+
+                // Count up whoever survived the gauntlet!
+                const counts = {};
+                users.forEach(u => {
+                    if (!busyUserIds.has(u.id)) {
+                        counts[u.position] = (counts[u.position] || 0) + 1;
+                    }
+                });
+
+                res.json({ success: true, counts });
+            });
+        });
+    });
+});
+
 app.get('/api/schedule/:userId', (req, res) => { db.query('SELECT day_of_week as day, hour_of_day as hour FROM user_schedules WHERE user_id = ?', [req.params.userId], (err, results) => res.json({ success: !err, schedule: results })); });
 app.get('/api/notifications/:userId', (req, res) => { db.query('SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC', [req.params.userId], (err, results) => res.json({ success: !err, notifications: results })); });
 app.post('/api/notifications/read', (req, res) => { db.query(`UPDATE notifications SET is_read = TRUE WHERE id = ?`, [req.body.notifId], (err) => res.json({ success: !err })); });
