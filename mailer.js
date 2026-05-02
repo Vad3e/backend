@@ -1,51 +1,43 @@
-// mailer.js
 const nodemailer = require('nodemailer');
 
-// Set up the Nodemailer transporter using your environment variables
+// 1. Configure the SMTP Transport
 const transporter = nodemailer.createTransport({
-    // 1. MUST use host. Delete `service: 'gmail'` completely!
-    host: 'smtp.gmail.com', 
-    port: 465,
-    secure: true,
+    host: 'smtp-relay.brevo.com', // Brevo's default SMTP server
+    port: 587,                    // Standard secure port
+    secure: false,                // Keep false for port 587
     auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
+        user: process.env.SMTP_USER, 
+        pass: process.env.SMTP_PASS  
     },
-    // 2. The Nuclear IPv4 overrides
-    family: 4,               // Tells Node to prefer IPv4
-    localAddress: '0.0.0.0', // Forces the connection out through an IPv4 interface
-    tls: {
-        rejectUnauthorized: false // Prevents strict SSL rejections on free hosts
+    family: 4 // Forces IPv4 connection to prevent server timeout errors
+});
+
+// 2. Verify the connection on startup
+transporter.verify((error, success) => {
+    if (error) {
+        console.error('❌ Brevo SMTP Connection Error:', error);
+    } else {
+        console.log('✅ Connected to Brevo SMTP Server (Ready to send emails!)');
     }
 });
-/**
- * Reusable function to send emails from anywhere in your app.
- * @param {string} to - The recipient's email address
- * @param {string} subject - The subject line of the email
- * @param {string} htmlContent - The HTML body of the email
- */
-async function sendEmail(to, subject, htmlContent) {
-    if (!to) {
-        console.error('[EMAIL] ❌ FAILED: No recipient address provided.');
-        return false;
-    }
-    
-    console.log(`\n[EMAIL] 🔄 Attempting to send email to: ${to} via Nodemailer`);
 
-    try {
-        await transporter.sendMail({ 
-            from: `"DeployDesk" <${process.env.EMAIL_USER}>`, 
-            to: to, 
-            subject: subject, 
-            html: htmlContent 
-        });
-        console.log(`[EMAIL] ✅ SUCCESS: Delivered to ${to}`);
-        return true;
-    } catch (error) {
-        console.error('[EMAIL] ❌ FAILED:', error.message);
-        return false;
-    }
-}
+// 3. Create a reusable function to send emails
+const sendEmail = (toEmail, subject, htmlContent) => {
+    const mailOptions = {
+        from: '"DeployDesk Notifications" <your_verified_sender@example.com>', // Replace with your verified Brevo sender email
+        to: toEmail,
+        subject: subject,
+        html: htmlContent
+    };
 
-// Export the function so other files (like server.js) can use it
+    transporter.sendMail(mailOptions, (error, info) => {
+        if (error) {
+            console.error(`[EMAIL] ❌ FAILED sending to ${toEmail}:`, error.message);
+        } else {
+            console.log(`[EMAIL] ✉️ SENT to ${toEmail} | ID: ${info.messageId}`);
+        }
+    });
+};
+
+// 4. Export the function for use in server.js
 module.exports = { sendEmail };
