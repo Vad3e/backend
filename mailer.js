@@ -3,7 +3,7 @@ const nodemailer = require('nodemailer');
 // 1. Configure the SMTP Transport
 const transporter = nodemailer.createTransport({
     host: 'smtp-relay.brevo.com', // Brevo's default SMTP server
-    port: 587,                    // Standard secure port
+    port: 2525,                    // Standard secure port
     secure: false,                // Keep false for port 587
     auth: {
         user: process.env.SMTP_USER, 
