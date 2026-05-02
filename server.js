@@ -575,13 +575,34 @@ app.get('/api/user-stats/:userId', (req, res) => {
 });
 
 app.post('/api/schedule', (req, res) => {
+    // 1. Delete the old schedule first
     db.query('DELETE FROM user_schedules WHERE user_id = ?', [req.body.userId], (err) => {
-        if (!req.body.busySlots || req.body.busySlots.length === 0) return res.json({ success: true });
-        const values = req.body.busySlots.map(slot => [req.body.userId, slot.day, slot.hour]);
-        db.query('INSERT INTO user_schedules (user_id, day_of_week, hour_of_day) VALUES ?', [values], (err) => res.json({ success: !err }));
+        if (err) {
+            console.error("Delete Error:", err);
+            return res.status(500).json({ success: false, message: 'Database error on delete' });
+        }
+
+        // 2. Look for schedule_array (what the frontend actually sends)
+        const incomingSchedule = req.body.schedule_array;
+
+        // 3. If the array is empty, the user just wanted to clear their schedule
+        if (!incomingSchedule || incomingSchedule.length === 0) {
+            return res.json({ success: true, message: 'Schedule cleared' });
+        }
+
+        // 4. Map the data for SQL insertion
+        const values = incomingSchedule.map(slot => [req.body.userId, slot.day, slot.hour]);
+        
+        // 5. Insert the new schedule
+        db.query('INSERT INTO user_schedules (user_id, day_of_week, hour_of_day) VALUES ?', [values], (err) => {
+            if (err) {
+                console.error("Insert Error:", err);
+                return res.status(500).json({ success: false, message: 'Database error on insert' });
+            }
+            res.json({ success: true, message: 'Schedule updated successfully' });
+        });
     });
 });
-
 app.get('/api/schedule/:userId', (req, res) => { db.query('SELECT day_of_week as day, hour_of_day as hour FROM user_schedules WHERE user_id = ?', [req.params.userId], (err, results) => res.json({ success: !err, schedule: results })); });
 app.get('/api/notifications/:userId', (req, res) => { db.query('SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC', [req.params.userId], (err, results) => res.json({ success: !err, notifications: results })); });
 app.post('/api/notifications/read', (req, res) => { db.query(`UPDATE notifications SET is_read = TRUE WHERE id = ?`, [req.body.notifId], (err) => res.json({ success: !err })); });
