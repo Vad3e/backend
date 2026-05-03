@@ -7,14 +7,14 @@ const multer = require('multer');
 const fs = require('fs'); 
 const crypto = require('crypto');
 
-// ⚡ ADDED: JSON Web Token for Secure Sessions
+// JSON Web Token for Secure Sessions
 const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-deploydesk-key-2026';
 
 // Import your custom email worker
 const { sendEmail } = require('./mailer');
 
-// ⚡ 1. IMPORT THE DNS MODULE & GLOBALLY FORCE IPv4
+// 1. IMPORT THE DNS MODULE & GLOBALLY FORCE IPv4
 const dns = require('dns');
 dns.setDefaultResultOrder('ipv4first');
 
@@ -23,7 +23,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ⚡ 2. FILE UPLOAD SETUP (MULTER)
+// 2. FILE UPLOAD SETUP (MULTER)
 const uploadDir = path.join(__dirname, 'public', 'uploads');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
@@ -36,7 +36,7 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
-// ⚡ 3. SECURE TiDB CONNECTION POOL (Crash-Proof)
+// 3. SECURE TiDB CONNECTION POOL (Crash-Proof)
 const db = mysql.createPool({
     host: process.env.DB_HOST || 'localhost', 
     user: process.env.DB_USER || 'root', 
@@ -74,54 +74,72 @@ db.on('error', (err) => {
 });
 
 // ==========================================
-// 1. AUTH & PASSWORD RESET ENDPOINTS
+// ⚡ OTP & AUTHENTICATION ENDPOINTS
 // ==========================================
-app.post('/api/login', (req, res) => {
-    const { email, password } = req.body;
+
+// Temporary in-memory storage for verification codes
+const otpStore = {}; 
+
+// Route to generate and email the verification code
+app.post('/api/send-otp', (req, res) => {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ success: false, message: 'Email is required' });
+
+    // Generate a random 6-digit code
+    const code = Math.floor(100000 + Math.random() * 900000).toString(); 
     
-    // ⚡ FIX: "ORDER BY id DESC LIMIT 1" ensures it always logs you into the newest, correct account
-    db.query('SELECT * FROM users WHERE email = ? ORDER BY id DESC LIMIT 1', [email], (err, results) => {
-        if (err) { res.status(500).json({ success: false, message: 'Database error' }); return; }
-        
-        if (results.length > 0) {
-            const user = results[0];
-            const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
-            
-            if (user.password_hash === passwordHash || user.password_hash === password) {
-                if (user.password_hash === password) {
-                    db.query('UPDATE users SET password_hash = ? WHERE id = ?', [passwordHash, user.id]);
-                }
+    // Save it with a 10-minute expiration
+    otpStore[email] = { 
+        code: code, 
+        expires: Date.now() + 10 * 60 * 1000 
+    };
 
-                // ⚡ NEW: Generate Secure JWT Token
-                const token = jwt.sign(
-                    { id: user.id, role: user.role },
-                    JWT_SECRET,
-                    { expiresIn: '7d' } // Token lasts 7 days
-                );
-
-                res.json({ 
-                    success: true, 
-                    token: token, // Send token to frontend
-                    user: { id: user.id, email: user.email, name: user.full_name, role: user.role, contact: user.contact_number, position: user.position, avatar: user.avatar } 
-                });
-            } else {
-                res.status(401).json({ success: false, message: 'Invalid email or password' }); 
-            }
-        } else { 
-            res.status(401).json({ success: false, message: 'Invalid email or password' }); 
-        }
-    });
+    // Send the email using your existing mailer function
+    const emailHtml = `
+        <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px;">
+            <h2>Verify your DeployDesk Account</h2>
+            <p>Your 6-digit verification code is:</p>
+            <h1 style="color: #1BA354; letter-spacing: 5px;">${code}</h1>
+            <p>This code will expire in 10 minutes.</p>
+        </div>
+    `;
+    sendEmail(email, 'DeployDesk Verification Code', emailHtml);
+    
+    res.json({ success: true, message: 'Verification code sent!' });
 });
 
 app.post('/api/signup', (req, res) => {
     console.log('\n[SIGNUP] 🔄 Received new signup request!');
-    const { email, password, fullName, contact, role, memberPosition } = req.body;
+    
+    // Accommodate both old and new frontend payload keys
+    const email = req.body.email;
+    const password = req.body.password;
+    const fullName = req.body.name || req.body.fullName; 
+    const contact = req.body.contact;
+    const role = req.body.role;
+    const memberPosition = req.body.position || req.body.memberPosition;
+    const otp = req.body.otp;
 
-    if (!email || !password || !fullName) {
-        console.log('[SIGNUP] ❌ Failed: Missing required fields');
-        return res.status(400).json({ success: false, message: 'Missing required fields' });
+    if (!email || !password || !fullName || !otp) {
+        console.log('[SIGNUP] ❌ Failed: Missing required fields or OTP code');
+        return res.status(400).json({ success: false, message: 'Missing required fields or verification code' });
     }
 
+    // ⚡ 1. Verify the OTP before doing anything else
+    const storedOtpData = otpStore[email];
+    
+    if (!storedOtpData || storedOtpData.code !== otp) {
+        return res.status(400).json({ success: false, message: 'Invalid verification code. Please check your email.' });
+    }
+    if (Date.now() > storedOtpData.expires) {
+        delete otpStore[email]; // Cleanup
+        return res.status(400).json({ success: false, message: 'Verification code expired. Please request a new one.' });
+    }
+
+    // ⚡ 2. The code is correct! Delete it so it can't be reused.
+    delete otpStore[email];
+
+    // 3. Proceed with standard account creation
     try {
         db.query('SELECT id FROM users WHERE email = ?', [email], (err, results) => {
             if (err) return res.status(500).json({ success: false, message: 'Database error' });
@@ -139,7 +157,7 @@ app.post('/api/signup', (req, res) => {
                 const welcomeHtml = `
                     <div style="font-family: Arial; padding: 20px; color: #111;">
                         <h2>Welcome to DeployDesk, ${fullName}!</h2>
-                        <p>Your account has been successfully created.</p>
+                        <p>Your account has been successfully created and verified.</p>
                         <p><strong>Role:</strong> ${role.toUpperCase()}</p>
                         <p>You can now log in to access the workspace.</p>
                     </div>`;
@@ -149,7 +167,7 @@ app.post('/api/signup', (req, res) => {
                     if (fetchErr) return res.status(500).json({ success: false, message: 'Account created but failed to load data.' });
                     console.log('[SIGNUP] 🎉 Sign up completely successful! Sending data to frontend.');
 
-                    // ⚡ NEW: Generate Secure JWT Token for new user
+                    // Generate Secure JWT Token for new user
                     const token = jwt.sign(
                         { id: newUsers[0].id, role: newUsers[0].role },
                         JWT_SECRET,
@@ -163,6 +181,42 @@ app.post('/api/signup', (req, res) => {
     } catch (catchedErr) {
         res.status(500).json({ success: false, message: 'Server crash' });
     }
+});
+
+app.post('/api/login', (req, res) => {
+    const { email, password } = req.body;
+    
+    // "ORDER BY id DESC LIMIT 1" ensures it always logs you into the newest account
+    db.query('SELECT * FROM users WHERE email = ? ORDER BY id DESC LIMIT 1', [email], (err, results) => {
+        if (err) { res.status(500).json({ success: false, message: 'Database error' }); return; }
+        
+        if (results.length > 0) {
+            const user = results[0];
+            const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
+            
+            if (user.password_hash === passwordHash || user.password_hash === password) {
+                if (user.password_hash === password) {
+                    db.query('UPDATE users SET password_hash = ? WHERE id = ?', [passwordHash, user.id]);
+                }
+
+                const token = jwt.sign(
+                    { id: user.id, role: user.role },
+                    JWT_SECRET,
+                    { expiresIn: '7d' }
+                );
+
+                res.json({ 
+                    success: true, 
+                    token: token,
+                    user: { id: user.id, email: user.email, name: user.full_name, role: user.role, contact: user.contact_number, position: user.position, avatar: user.avatar } 
+                });
+            } else {
+                res.status(401).json({ success: false, message: 'Invalid email or password' }); 
+            }
+        } else { 
+            res.status(401).json({ success: false, message: 'Invalid email or password' }); 
+        }
+    });
 });
 
 app.post('/api/forgot-password', (req, res) => {
@@ -233,6 +287,7 @@ app.post('/api/change-password', (req, res) => {
         });
     });
 });
+
 // ==========================================
 // ⚡ GLOBAL SYSTEM SETTINGS ENDPOINTS
 // ==========================================
@@ -263,7 +318,7 @@ app.post('/api/settings', (req, res) => {
 });
 
 // ==========================================
-// 2. EVENTS & PYTHON CCAA 
+// EVENTS & PYTHON CCAA 
 // ==========================================
 app.get('/api/events', (req, res) => {
     db.query(`SELECT e.*, u.full_name as requester_name FROM event_requests e LEFT JOIN users u ON e.requester_id = u.id ORDER BY e.event_date ASC`, (err, results) => {
@@ -317,7 +372,7 @@ app.post('/api/events', upload.array('files', 10), (req, res) => {
             }
         } catch(e) {}
 
-        // ✉️ TRIGGER 3: Admin Notified of New Request
+        // Admin Notified of New Request
         db.query(`SELECT id, position, email FROM users WHERE role = 'admin'`, (err, admins) => {
             if (admins && admins.length > 0) {
                 admins.forEach(admin => {
@@ -329,7 +384,7 @@ app.post('/api/events', upload.array('files', 10), (req, res) => {
             }
         });
 
-        // ✉️ TRIGGER 2: Requester Notified of Submission
+        // Requester Notified of Submission
         db.query('INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, ?, ?)', [safeRequesterId, `Ticket Submitted: Your request for "${title}" is awaiting initial admin review.`, 'info', eventId], () => {});
         db.query('SELECT email, full_name FROM users WHERE id = ?', [safeRequesterId], (err, users) => {
             if(users && users.length > 0) {
@@ -368,7 +423,6 @@ app.post('/api/events/roster', (req, res) => {
             if (isFullyForwarded) {
                 db.query(`UPDATE event_requests SET status = 'pending_admin' WHERE id = ?`, [eventId], () => {
                     
-                    // ✉️ TRIGGER 5: Roster Selection Forwarded
                     db.query(`SELECT id, email FROM users WHERE role = 'admin'`, (err, topAdmins) => {
                         if (topAdmins && topAdmins.length > 0) {
                             topAdmins.forEach(admin => {
@@ -411,7 +465,6 @@ app.post('/api/events/status', (req, res) => {
                     db.query(`UPDATE event_requests SET status = 'pending' WHERE id = ?`, [eventId], () => {
                         db.query(`UPDATE event_allocations SET status = 'notified' WHERE event_id = ? AND status = 'eligible'`, [eventId], () => {
                             
-                            // ✉️ TRIGGER 4: Members Received Initial Approval (CCAA Match)
                             db.query(`SELECT a.user_id, u.email, u.full_name FROM event_allocations a JOIN users u ON a.user_id = u.id WHERE a.event_id = ? AND a.status = 'notified'`, [eventId], (err, allocations) => {
                                 if (allocations) {
                                     allocations.forEach(a => {
@@ -445,7 +498,6 @@ app.post('/api/events/status', (req, res) => {
                             if (memberDetails) {
                                 let teamListHtml = '<ul style="background: #f4f4f4; padding: 15px; border-radius: 8px; list-style: none;">';
                                 
-                                // ✉️ TRIGGER 6: Admin Approval (Members officially assigned)
                                 memberDetails.forEach(m => { 
                                     teamListHtml += `<li style="margin-bottom: 8px;">✅ <strong>${m.full_name}</strong> — ${m.required_role}</li>`; 
                                     db.query(`INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, 'success', ?)`, [m.user_id, `You have been officially ASSIGNED to cover an event!`, eventId]);
@@ -453,7 +505,6 @@ app.post('/api/events/status', (req, res) => {
                                 });
                                 teamListHtml += '</ul>';
 
-                                // ✉️ TRIGGER 7a: Request is Approved (for the Requester)
                                 db.query(`SELECT u.email, u.full_name, e.title, e.requester_id FROM event_requests e JOIN users u ON e.requester_id = u.id WHERE e.id = ?`, [eventId], (err, results) => {
                                     if (results && results.length > 0) {
                                         const requester = results[0];
@@ -477,10 +528,8 @@ app.post('/api/events/status', (req, res) => {
                 }
             });
         } else {
-            // Rejections and other arbitrary status updates
             db.query(`UPDATE event_requests SET status = ? WHERE id = ?`, [status, eventId], () => { 
                 
-                // ✉️ TRIGGER 7b: Request is Rejected (for the Requester)
                 if (status === 'rejected') {
                     db.query(`SELECT u.email, u.full_name, e.title, e.requester_id FROM event_requests e JOIN users u ON e.requester_id = u.id WHERE e.id = ?`, [eventId], (err, results) => {
                         if (results && results.length > 0) {
@@ -504,7 +553,7 @@ app.post('/api/events/status', (req, res) => {
 });
 
 // ==========================================
-// 3. ALLOCATIONS & ADMIN DIRECTORY
+// ALLOCATIONS & ADMIN DIRECTORY
 // ==========================================
 app.get('/api/allocations/member/:userId', (req, res) => {
     const sql = `
@@ -581,7 +630,7 @@ app.post('/api/events/live-tracking-update', (req, res) => {
     );
 });
 // ==========================================
-// 4. UTILS, SCHEDULE, AND NOTIFICATIONS
+// UTILS, SCHEDULE, AND NOTIFICATIONS
 // ==========================================
 app.get('/api/workload-ranking', (req, res) => {
     db.query(`SELECT u.id, u.full_name, u.position, u.role, (SELECT COUNT(*) FROM event_allocations ea JOIN event_requests er ON ea.event_id = er.id WHERE ea.user_id = u.id AND ea.status = 'assigned' AND er.status = 'approved' AND er.event_date >= CURDATE()) as active_tasks FROM users u WHERE u.role IN ('member', 'administrative') ORDER BY active_tasks DESC, u.full_name ASC`, (err, results) => {
@@ -598,25 +647,20 @@ app.get('/api/user-stats/:userId', (req, res) => {
 });
 
 app.post('/api/schedule', (req, res) => {
-    // 1. Delete the old schedule first
     db.query('DELETE FROM user_schedules WHERE user_id = ?', [req.body.userId], (err) => {
         if (err) {
             console.error("Delete Error:", err);
             return res.status(500).json({ success: false, message: 'Database error on delete' });
         }
 
-        // 2. Look for schedule_array (what the frontend actually sends)
         const incomingSchedule = req.body.schedule_array;
 
-        // 3. If the array is empty, the user just wanted to clear their schedule
         if (!incomingSchedule || incomingSchedule.length === 0) {
             return res.json({ success: true, message: 'Schedule cleared' });
         }
 
-        // 4. Map the data for SQL insertion
         const values = incomingSchedule.map(slot => [req.body.userId, slot.day, slot.hour]);
         
-        // 5. Insert the new schedule
         db.query('INSERT INTO user_schedules (user_id, day_of_week, hour_of_day) VALUES ?', [values], (err) => {
             if (err) {
                 console.error("Insert Error:", err);
@@ -630,30 +674,24 @@ app.post('/api/schedule', (req, res) => {
 app.get('/api/check-availability', (req, res) => {
     const { date, start, end } = req.query;
     
-    // 1. Calculate the UI Day (Monday = 0, Tuesday = 1... Saturday = 5)
     const d = new Date(date);
     let uiDay = d.getDay() - 1; 
-    if (uiDay < 0) uiDay = 6; // Catch Sunday
+    if (uiDay < 0) uiDay = 6; 
 
-    // 2. Parse the hours the requester needs
     const startHour = parseInt(start.split(':')[0]);
     const endHour = parseInt(end.split(':')[0]);
     const requiredHours = [];
     for(let h = startHour; h < endHour; h++) requiredHours.push(h);
 
-    // 3. Fetch all eligible members
     db.query('SELECT id, position FROM users WHERE role IN ("member", "administrative") AND position IS NOT NULL', (err, users) => {
         if (err) return res.status(500).json({ success: false });
 
-        // 4. Check their weekly schedules for conflicts on that specific day
         db.query('SELECT user_id, hour_of_day FROM user_schedules WHERE day_of_week = ?', [uiDay], (err, schedules) => {
             
-            // 5. Check if they are already assigned to an approved event on that exact date
             db.query(`SELECT a.user_id FROM event_allocations a JOIN event_requests e ON a.event_id = e.id WHERE e.event_date = ? AND a.status IN ('assigned', 'accepted')`, [date], (err, allocations) => {
                 
                 const busyUserIds = new Set();
 
-                // Rule 1: Eliminate members who marked their schedule as "Busy" during these hours
                 if (schedules) {
                     schedules.forEach(row => {
                         if (requiredHours.includes(row.hour_of_day)) {
@@ -662,14 +700,12 @@ app.get('/api/check-availability', (req, res) => {
                     });
                 }
 
-                // Rule 2: Eliminate members already assigned to cover another event that day
                 if (allocations) {
                     allocations.forEach(row => {
                         busyUserIds.add(row.user_id);
                     });
                 }
 
-                // Count up whoever survived the gauntlet!
                 const counts = {};
                 users.forEach(u => {
                     if (!busyUserIds.has(u.id)) {
@@ -687,9 +723,6 @@ app.get('/api/schedule/:userId', (req, res) => { db.query('SELECT day_of_week as
 app.get('/api/notifications/:userId', (req, res) => { db.query('SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC', [req.params.userId], (err, results) => res.json({ success: !err, notifications: results })); });
 app.post('/api/notifications/read', (req, res) => { db.query(`UPDATE notifications SET is_read = TRUE WHERE id = ?`, [req.body.notifId], (err) => res.json({ success: !err })); });
 app.post('/api/notifications/read-all', (req, res) => { db.query(`UPDATE notifications SET is_read = TRUE WHERE user_id = ?`, [req.body.userId], (err) => res.json({ success: !err })); });
-
-
-
 
 // Let Render decide the port, but fallback to 3000 for local testing
 const PORT = process.env.PORT || 3000;
