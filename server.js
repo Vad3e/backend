@@ -210,6 +210,29 @@ app.post('/api/reset-password', (req, res) => {
     });
 });
 
+app.post('/api/change-password', (req, res) => {
+    const { userId, currentPassword, newPassword } = req.body;
+    
+    // 1. Find the user in the database
+    db.query('SELECT password_hash FROM users WHERE id = ?', [userId], (err, results) => {
+        if (err || results.length === 0) return res.status(500).json({ success: false, message: 'User not found' });
+
+        const user = results[0];
+        const currentHash = crypto.createHash('sha256').update(currentPassword).digest('hex');
+
+        // 2. Verify their current password is correct
+        if (user.password_hash !== currentHash && user.password_hash !== currentPassword) {
+            return res.status(401).json({ success: false, message: 'Incorrect current password' });
+        }
+
+        // 3. Hash the NEW password and save it
+        const newHash = crypto.createHash('sha256').update(newPassword).digest('hex');
+        db.query('UPDATE users SET password_hash = ? WHERE id = ?', [newHash, userId], (updateErr) => {
+            if (updateErr) return res.status(500).json({ success: false, message: 'Failed to update password' });
+            res.json({ success: true, message: 'Password updated successfully' });
+        });
+    });
+});
 // ==========================================
 // ⚡ GLOBAL SYSTEM SETTINGS ENDPOINTS
 // ==========================================
