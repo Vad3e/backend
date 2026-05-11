@@ -571,13 +571,14 @@ app.post('/api/allocations/accept', (req, res) => { db.query(`UPDATE event_alloc
 app.post('/api/allocations/decline', (req, res) => { db.query(`UPDATE event_allocations SET status = 'declined' WHERE id = ?`, [req.body.allocationId], (err) => res.json({ success: !err })); });
 
 app.get('/api/allocations/admin/:eventId', (req, res) => {
-    db.query(`SELECT a.*, u.full_name as user_name, (SELECT COUNT(*) FROM event_allocations ea JOIN event_requests er ON ea.event_id = er.id WHERE ea.user_id = a.user_id AND ea.status = 'assigned' AND er.status = 'approved') as current_workload FROM event_allocations a JOIN users u ON a.user_id = u.id WHERE a.event_id = ?`, [req.params.eventId], (err, results) => {
+    // Added u.avatar to the SELECT statement
+    db.query(`SELECT a.*, u.full_name as user_name, u.avatar, (SELECT COUNT(*) FROM event_allocations ea JOIN event_requests er ON ea.event_id = er.id WHERE ea.user_id = a.user_id AND ea.status = 'assigned' AND er.status = 'approved') as current_workload FROM event_allocations a JOIN users u ON a.user_id = u.id WHERE a.event_id = ?`, [req.params.eventId], (err, results) => {
         res.json({ success: !err, allocations: results });
     });
 });
-
 app.get('/api/users', (req, res) => { 
-    db.query(`SELECT id, full_name, email, role, contact_number, position, created_at FROM users ORDER BY created_at DESC`, (err, results) => {
+    // Added avatar to the SELECT statement
+    db.query(`SELECT id, full_name, email, role, contact_number, position, created_at, avatar FROM users ORDER BY created_at DESC`, (err, results) => {
         res.json({ success: !err, users: results });
     }); 
 });
@@ -633,7 +634,8 @@ app.post('/api/events/live-tracking-update', (req, res) => {
 // UTILS, SCHEDULE, AND NOTIFICATIONS
 // ==========================================
 app.get('/api/workload-ranking', (req, res) => {
-    db.query(`SELECT u.id, u.full_name, u.position, u.role, (SELECT COUNT(*) FROM event_allocations ea JOIN event_requests er ON ea.event_id = er.id WHERE ea.user_id = u.id AND ea.status = 'assigned' AND er.status = 'approved' AND er.event_date >= CURDATE()) as active_tasks FROM users u WHERE u.role IN ('member', 'administrative') ORDER BY active_tasks DESC, u.full_name ASC`, (err, results) => {
+    // Added u.avatar to the SELECT statement
+    db.query(`SELECT u.id, u.full_name, u.position, u.role, u.avatar, (SELECT COUNT(*) FROM event_allocations ea JOIN event_requests er ON ea.event_id = er.id WHERE ea.user_id = u.id AND ea.status = 'assigned' AND er.status = 'approved' AND er.event_date >= CURDATE()) as active_tasks FROM users u WHERE u.role IN ('member', 'administrative') ORDER BY active_tasks DESC, u.full_name ASC`, (err, results) => {
         res.json({ success: !err, ranking: results });
     });
 });
