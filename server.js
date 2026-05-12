@@ -753,4 +753,3 @@ app.post('/api/notifications/read-all', (req, res) => { db.query(`UPDATE notific
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 
-}
