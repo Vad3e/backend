@@ -10,7 +10,8 @@ const crypto = require('crypto');
 
 // Cloudinary Integrations
 const cloudinary = require('cloudinary').v2;
-const { CloudinaryStorage } = require('multer-storage-cloudinary');
+// ⚡ FIX: Import the module dynamically to support all versions
+const MulterCloudinary = require('multer-storage-cloudinary');
 
 // JSON Web Token for Secure Sessions
 const jwt = require('jsonwebtoken');
@@ -28,21 +29,34 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// 2. CLOUDINARY UPLOAD SETUP
+// 2. CLOUDINARY UPLOAD SETUP (Version-Proofed)
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-const storage = new CloudinaryStorage({
-  cloudinary: cloudinary,
-  params: {
-    folder: 'DeployDesk_Files',
-    resource_type: 'auto', // "auto" is required to allow PDFs and Docs!
-    allowedFormats: ['jpg', 'png', 'pdf', 'doc', 'docx', 'jpeg']
-  },
-});
+let storage;
+// Automatically detect which package version Render installed
+if (MulterCloudinary.CloudinaryStorage) {
+    // V4+ Setup
+    storage = new MulterCloudinary.CloudinaryStorage({
+        cloudinary: cloudinary,
+        params: {
+            folder: 'DeployDesk_Files',
+            resource_type: 'auto', 
+            allowedFormats: ['jpg', 'png', 'pdf', 'doc', 'docx', 'jpeg']
+        },
+    });
+} else {
+    // V1 / Legacy Setup
+    storage = MulterCloudinary({
+        cloudinary: cloudinary,
+        folder: 'DeployDesk_Files',
+        allowedFormats: ['jpg', 'png', 'pdf', 'doc', 'docx', 'jpeg']
+    });
+}
+
 const upload = multer({ storage: storage });
 
 // 3. SECURE TiDB CONNECTION POOL (Crash-Proof)
@@ -738,3 +752,5 @@ app.post('/api/notifications/read-all', (req, res) => { db.query(`UPDATE notific
 // Let Render decide the port, but fallback to 3000 for local testing
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+
+}
