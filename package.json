@@ -1,5 +1,5 @@
 {
-  "name": "deploydesk-app",
+  "name": "deploydesk_app",
   "version": "1.0.0",
   "description": "",
   "main": "server.js",
@@ -12,15 +12,13 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "cloudinary": "^2.2.0",
-    "cors": "^2.8.6",
-    "dotenv": "^16.4.5",
+    "cloudinary": "^1.41.3",
+    "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "jsonwebtoken": "^9.0.3",
     "multer": "^2.1.1",
     "multer-storage-cloudinary": "^4.0.0",
-    "mysql2": "^3.19.1",
-    "nodemailer": "^8.0.2",
-    "resend": "^6.10.0"
+    "mysql2": "^3.22.0",
+    "nodemailer": "^8.0.5",
+    "react": "^19.2.5"
   }
 }
