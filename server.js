@@ -358,66 +358,73 @@ app.post('/api/events/delete', (req, res) => {
 });
 
 // ⚡ UPDATED: Handling Cloudinary file paths
-app.post('/api/events', upload.array('files', 10), (req, res) => {
-    const { title, date, time, venue, members, type, requesterId } = req.body;
-    let baseDescription = req.body.description || '';
-    const personnelReqs = req.body.personnelReqs || '[]'; 
-    const reqCode = 'REQ-' + Math.floor(Date.now() / 1000) + Math.floor(Math.random() * 9); 
-
-    if (req.files && req.files.length > 0) {
-        baseDescription += `\n\n[Attached Documents]:`;
-        req.files.forEach(file => {
-            // Use file.path for Cloudinary secure URL
-            baseDescription += `\n<a href="${file.path}" target="_blank" style="color:#1BA354;">📎 ${file.originalname}</a>`;
-        });
-    }
-
-    const safeRequesterId = parseInt(requesterId) || 0;
-    const safeMembers = parseInt(members) || 1;
-    const safeType = type || 'Event';
-    const defaultApprovals = JSON.stringify({ initial: [], forwarded: [], final: [] });
-
-    const query = `INSERT INTO event_requests (req_code, title, description, requester_id, event_date, start_time, venue, members_required, event_type, status, algo_status, personnel_reqs, admin_approvals) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'awaiting_initial_admin', 'clear', ?, ?)`;
-    const values = [reqCode, title, baseDescription, safeRequesterId, date, time, venue, safeMembers, safeType, personnelReqs, defaultApprovals];
-
-    db.query(query, values, (err, result) => {
+// ⚡ UPDATED: Catching Cloudinary Errors Safely
+app.post('/api/events', (req, res) => {
+    
+    // Wrap the upload so we can catch exactly what is crashing
+    const uploadHandler = upload.array('files', 10);
+    
+    uploadHandler(req, res, function (err) {
         if (err) {
-            console.error('❌ MYSQL ERROR:', err.message);
-            return res.status(500).json({ success: false }); 
+            console.error('❌ CLOUDINARY UPLOAD ERROR:', err);
+            // This stops the crash and sends the exact error to the frontend/logs
+            return res.status(500).json({ success: false, message: 'Cloudinary Error: ' + err.message });
         }
 
-        const eventId = result.insertId;
-        
+        // If upload succeeds, process the request
         try {
-            const parsedReqs = JSON.parse(personnelReqs);
-            if (parsedReqs && parsedReqs.length > 0) {
-                const pythonProcess = spawn('python3', ['ccaa_engine.py', eventId, personnelReqs]);
-                pythonProcess.stdout.on('data', (data) => console.log(`🐍 Python Engine: ${data}`));
-                pythonProcess.stderr.on('data', (data) => console.error(`❌ Python Error: ${data}`));
-            }
-        } catch(e) {}
+            const { title, date, time, venue, members, type, requesterId } = req.body;
+            let baseDescription = req.body.description || '';
+            const personnelReqs = req.body.personnelReqs || '[]'; 
+            const reqCode = 'REQ-' + Math.floor(Date.now() / 1000) + Math.floor(Math.random() * 9); 
 
-        // Admin Notified of New Request
-        db.query(`SELECT id, position, email FROM users WHERE role = 'admin'`, (err, admins) => {
-            if (admins && admins.length > 0) {
-                admins.forEach(admin => {
-                    db.query(`INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, 'warning', ?)`, [admin.id, `New Ticket: Event "${title}" needs your initial approval.`, eventId], () => {});
-                    if(admin.email) {
-                        sendEmail(admin.email, 'DeployDesk: New Ticket Requires Approval', `<div style="font-family:Arial; color:#333;"><p>Hello Admin,</p><p>A new event request <b>"${title}"</b> has been submitted and requires your initial approval before the matching engine can run.</p></div>`);
-                    }
+            if (req.files && req.files.length > 0) {
+                baseDescription += `\n\n[Attached Documents]:`;
+                req.files.forEach(file => {
+                    baseDescription += `\n<a href="${file.path}" target="_blank" style="color:#1BA354;">📎 View Document</a>`;
                 });
             }
-        });
 
-        // Requester Notified of Submission
-        db.query('INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, ?, ?)', [safeRequesterId, `Ticket Submitted: Your request for "${title}" is awaiting initial admin review.`, 'info', eventId], () => {});
-        db.query('SELECT email, full_name FROM users WHERE id = ?', [safeRequesterId], (err, users) => {
-            if(users && users.length > 0) {
-                sendEmail(users[0].email, 'DeployDesk: Ticket Submitted', `<div style="font-family:Arial; color:#333;"><p>Hello ${users[0].full_name},</p><p>Your event request <b>"${title}"</b> has been successfully submitted and is now awaiting admin review.</p></div>`);
-            }
-        });
-        
-        res.json({ success: true });
+            const safeRequesterId = parseInt(requesterId) || 0;
+            const safeMembers = parseInt(members) || 1;
+            const safeType = type || 'Event';
+            const defaultApprovals = JSON.stringify({ initial: [], forwarded: [], final: [] });
+
+            const query = `INSERT INTO event_requests (req_code, title, description, requester_id, event_date, start_time, venue, members_required, event_type, status, algo_status, personnel_reqs, admin_approvals) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'awaiting_initial_admin', 'clear', ?, ?)`;
+            const values = [reqCode, title, baseDescription, safeRequesterId, date, time, venue, safeMembers, safeType, personnelReqs, defaultApprovals];
+
+            db.query(query, values, (dbErr, result) => {
+                if (dbErr) {
+                    console.error('❌ MYSQL ERROR:', dbErr.message);
+                    return res.status(500).json({ success: false, message: 'Database error' }); 
+                }
+
+                const eventId = result.insertId;
+                
+                try {
+                    const parsedReqs = JSON.parse(personnelReqs);
+                    if (parsedReqs && parsedReqs.length > 0) {
+                        const pythonProcess = spawn('python3', ['ccaa_engine.py', eventId, personnelReqs]);
+                        pythonProcess.stdout.on('data', (data) => console.log(`🐍 Python Engine: ${data}`));
+                        pythonProcess.stderr.on('data', (data) => console.error(`❌ Python Error: ${data}`));
+                    }
+                } catch(e) {}
+
+                // Admin Notified of New Request
+                db.query(`SELECT id, position, email FROM users WHERE role = 'admin'`, (err, admins) => {
+                    if (admins && admins.length > 0) {
+                        admins.forEach(admin => {
+                            db.query(`INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, 'warning', ?)`, [admin.id, `New Ticket: Event "${title}" needs your initial approval.`, eventId], () => {});
+                        });
+                    }
+                });
+
+                res.json({ success: true });
+            });
+        } catch (serverErr) {
+            console.error('❌ SERVER ERROR:', serverErr);
+            res.status(500).json({ success: false, message: 'Server crash during save' });
+        }
     });
 });
 
