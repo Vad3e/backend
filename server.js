@@ -1,3 +1,4 @@
+require('dotenv').config(); // Loads environment variables
 const { spawn } = require('child_process');
 const express = require('express');
 const cors = require('cors');
@@ -6,6 +7,10 @@ const path = require('path');
 const multer = require('multer');
 const fs = require('fs'); 
 const crypto = require('crypto');
+
+// Cloudinary Integrations
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
 // JSON Web Token for Secure Sessions
 const jwt = require('jsonwebtoken');
@@ -23,16 +28,20 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// 2. FILE UPLOAD SETUP (MULTER)
-const uploadDir = path.join(__dirname, 'public', 'uploads');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+// 2. CLOUDINARY UPLOAD SETUP
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
 
-const storage = multer.diskStorage({
-    destination: function (req, file, cb) { cb(null, uploadDir) },
-    filename: function (req, file, cb) { 
-        const safeName = file.originalname.replace(/[^a-zA-Z0-9.]/g, '_');
-        cb(null, Date.now() + '-' + safeName); 
-    }
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'DeployDesk_Files',
+    resource_type: 'auto', // "auto" is required to allow PDFs and Docs!
+    allowedFormats: ['jpg', 'png', 'pdf', 'doc', 'docx', 'jpeg']
+  },
 });
 const upload = multer({ storage: storage });
 
@@ -334,6 +343,7 @@ app.post('/api/events/delete', (req, res) => {
     });
 });
 
+// ⚡ UPDATED: Handling Cloudinary file paths
 app.post('/api/events', upload.array('files', 10), (req, res) => {
     const { title, date, time, venue, members, type, requesterId } = req.body;
     let baseDescription = req.body.description || '';
@@ -343,7 +353,8 @@ app.post('/api/events', upload.array('files', 10), (req, res) => {
     if (req.files && req.files.length > 0) {
         baseDescription += `\n\n[Attached Documents]:`;
         req.files.forEach(file => {
-            baseDescription += `\n<a href="/uploads/${file.filename}" target="_blank" style="color:#1BA354;">📄 ${file.originalname}</a>`;
+            // Use file.path for Cloudinary secure URL
+            baseDescription += `\n<a href="${file.path}" target="_blank" style="color:#1BA354;">📎 ${file.originalname}</a>`;
         });
     }
 
@@ -571,13 +582,11 @@ app.post('/api/allocations/accept', (req, res) => { db.query(`UPDATE event_alloc
 app.post('/api/allocations/decline', (req, res) => { db.query(`UPDATE event_allocations SET status = 'declined' WHERE id = ?`, [req.body.allocationId], (err) => res.json({ success: !err })); });
 
 app.get('/api/allocations/admin/:eventId', (req, res) => {
-    // Added u.avatar to the SELECT statement
     db.query(`SELECT a.*, u.full_name as user_name, u.avatar, (SELECT COUNT(*) FROM event_allocations ea JOIN event_requests er ON ea.event_id = er.id WHERE ea.user_id = a.user_id AND ea.status = 'assigned' AND er.status = 'approved') as current_workload FROM event_allocations a JOIN users u ON a.user_id = u.id WHERE a.event_id = ?`, [req.params.eventId], (err, results) => {
         res.json({ success: !err, allocations: results });
     });
 });
 app.get('/api/users', (req, res) => { 
-    // Added avatar to the SELECT statement
     db.query(`SELECT id, full_name, email, role, contact_number, position, created_at, avatar FROM users ORDER BY created_at DESC`, (err, results) => {
         res.json({ success: !err, users: results });
     }); 
@@ -630,11 +639,11 @@ app.post('/api/events/live-tracking-update', (req, res) => {
         }
     );
 });
+
 // ==========================================
 // UTILS, SCHEDULE, AND NOTIFICATIONS
 // ==========================================
 app.get('/api/workload-ranking', (req, res) => {
-    // Added u.avatar to the SELECT statement
     db.query(`SELECT u.id, u.full_name, u.position, u.role, u.avatar, (SELECT COUNT(*) FROM event_allocations ea JOIN event_requests er ON ea.event_id = er.id WHERE ea.user_id = u.id AND ea.status = 'assigned' AND er.status = 'approved' AND er.event_date >= CURDATE()) as active_tasks FROM users u WHERE u.role IN ('member', 'administrative') ORDER BY active_tasks DESC, u.full_name ASC`, (err, results) => {
         res.json({ success: !err, ranking: results });
     });
