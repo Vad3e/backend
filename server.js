@@ -361,7 +361,17 @@ app.post('/api/events/delete', (req, res) => {
     });
 });
 
-app.post('/api/events', upload.array('files', 10), (req, res) => {
+app.post('/api/events', (req, res, next) => {
+    // Intercept the upload to catch and reveal the hidden error
+    upload.array('files', 10)(req, res, (err) => {
+        if (err) {
+            console.error('❌ CLOUDINARY UPLOAD ERROR DETAILS:');
+            console.error(JSON.stringify(err, null, 2)); // This forces JS to print the actual error text!
+            return res.status(500).json({ success: false, message: 'File upload failed. Please check server logs.' });
+        }
+        next(); // If no error, continue to the route below
+    });
+}, (req, res) => {
     const { title, date, time, venue, members, type, requesterId } = req.body;
     let baseDescription = req.body.description || '';
     const personnelReqs = req.body.personnelReqs || '[]'; 
