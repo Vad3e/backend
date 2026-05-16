@@ -58,7 +58,6 @@ if (multerCloudinary.CloudinaryStorage) {
 }
 
 const upload = multer({ storage: storage });
-const upload = multer({ storage: storage });
 
 // 3. SECURE TiDB CONNECTION POOL (Crash-Proof)
 const db = mysql.createPool({
