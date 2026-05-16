@@ -377,8 +377,10 @@ app.post('/api/events', (req, res, next) => {
     if (req.files && req.files.length > 0) {
         baseDescription += `\n\n[Attached Documents]:`;
         req.files.forEach(file => {
-            // file.path now contains the full https://res.cloudinary.com/... URL
-            baseDescription += `\n<a href="${file.path}" target="_blank" style="color:#1BA354;">📄 ${file.originalname}</a>`;
+            // ⚡ FIX: Bulletproof check for the URL regardless of the package version
+            const cloudUrl = file.path || file.secure_url || file.url;
+            
+            baseDescription += `\n<a href="${cloudUrl}" target="_blank" style="color:#1BA354; text-decoration: underline;">📄 ${file.originalname}</a>`;
         });
     }
 
