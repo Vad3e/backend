@@ -25,36 +25,40 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // 2. FILE UPLOAD SETUP (CLOUDINARY)
-const cloudinary = require('cloudinary').v2;
+const cloudinaryRoot = require('cloudinary');
+const cloudinaryV2 = require('cloudinary').v2;
 const multerCloudinary = require('multer-storage-cloudinary');
 
 // Configure Cloudinary with your credentials
-cloudinary.config({
+cloudinaryV2.config({
     cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
     api_key: process.env.CLOUDINARY_API_KEY,
     api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-const storageOptions = {
-    cloudinary: cloudinary,
-    params: {
-        folder: 'deploydesk_attachments', 
-        resource_type: 'auto',            
-        public_id: (req, file) => {
-            const safeName = file.originalname.replace(/[^a-zA-Z0-9]/g, '_');
-            return Date.now() + '-' + safeName;
-        }
+const paramsConfig = {
+    folder: 'deploydesk_attachments', 
+    resource_type: 'auto',            
+    public_id: (req, file) => {
+        const safeName = file.originalname.replace(/[^a-zA-Z0-9]/g, '_');
+        return Date.now() + '-' + safeName;
     }
 };
 
-// ⚡ FIX: Auto-detect the package version so it never crashes!
+// ⚡ FIX: Hand each version exactly the object it expects!
 let storage;
 if (multerCloudinary.CloudinaryStorage) {
-    // Version 4+ syntax
-    storage = new multerCloudinary.CloudinaryStorage(storageOptions);
+    // Version 4+ syntax (Expects the V2 object)
+    storage = new multerCloudinary.CloudinaryStorage({
+        cloudinary: cloudinaryV2,
+        params: paramsConfig
+    });
 } else {
-    // Version 3 and below syntax
-    storage = multerCloudinary(storageOptions);
+    // Version 3 and below syntax (Expects the ROOT object)
+    storage = multerCloudinary({
+        cloudinary: cloudinaryRoot,
+        params: paramsConfig
+    });
 }
 
 const upload = multer({ storage: storage });
