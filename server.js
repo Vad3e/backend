@@ -36,28 +36,25 @@ cloudinaryV2.config({
     api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-const paramsConfig = {
-    folder: 'deploydesk_attachments', 
-    resource_type: 'auto',            
-    public_id: (req, file) => {
-        const safeName = file.originalname.replace(/[^a-zA-Z0-9]/g, '_');
-        return Date.now() + '-' + safeName;
-    }
-};
-
-// ⚡ FIX: Hand each version exactly the object it expects!
+// ⚡ FIX: Let Cloudinary auto-generate safe, random filenames to prevent crashes!
 let storage;
 if (multerCloudinary.CloudinaryStorage) {
-    // Version 4+ syntax (Expects the V2 object)
+    // Version 4+ syntax
     storage = new multerCloudinary.CloudinaryStorage({
         cloudinary: cloudinaryV2,
-        params: paramsConfig
+        params: {
+            folder: 'deploydesk_attachments', 
+            resource_type: 'auto'
+        }
     });
 } else {
-    // Version 3 and below syntax (Expects the ROOT object)
+    // Version 3 and below syntax
     storage = multerCloudinary({
         cloudinary: cloudinaryRoot,
-        params: paramsConfig
+        folder: 'deploydesk_attachments',
+        params: {
+            resource_type: 'auto'
+        }
     });
 }
 
