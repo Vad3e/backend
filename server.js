@@ -1,3 +1,4 @@
+require('dotenv').config();
 const { spawn } = require('child_process');
 const express = require('express');
 const cors = require('cors');
@@ -34,19 +35,40 @@ cloudinary.config({
     api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// Set up the Cloudinary storage engine
-const storage = new CloudinaryStorage({
+// 2. FILE UPLOAD SETUP (CLOUDINARY)
+const cloudinary = require('cloudinary').v2;
+const multerCloudinary = require('multer-storage-cloudinary');
+
+// Configure Cloudinary with your credentials
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+const storageOptions = {
     cloudinary: cloudinary,
     params: {
-        folder: 'deploydesk_attachments', // The folder name in your Cloudinary dashboard
-        resource_type: 'auto',            // CRITICAL: 'auto' allows PDFs, DOCX, and Zips (not just images)
+        folder: 'deploydesk_attachments', 
+        resource_type: 'auto',            
         public_id: (req, file) => {
             const safeName = file.originalname.replace(/[^a-zA-Z0-9]/g, '_');
             return Date.now() + '-' + safeName;
         }
     }
-});
+};
 
+// ⚡ FIX: Auto-detect the package version so it never crashes!
+let storage;
+if (multerCloudinary.CloudinaryStorage) {
+    // Version 4+ syntax
+    storage = new multerCloudinary.CloudinaryStorage(storageOptions);
+} else {
+    // Version 3 and below syntax
+    storage = multerCloudinary(storageOptions);
+}
+
+const upload = multer({ storage: storage });
 const upload = multer({ storage: storage });
 
 // 3. SECURE TiDB CONNECTION POOL (Crash-Proof)
