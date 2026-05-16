@@ -1,4 +1,3 @@
-require('dotenv').config(); // Loads environment variables
 const { spawn } = require('child_process');
 const express = require('express');
 const cors = require('cors');
@@ -7,11 +6,6 @@ const path = require('path');
 const multer = require('multer');
 const fs = require('fs'); 
 const crypto = require('crypto');
-
-// Cloudinary Integrations
-const cloudinary = require('cloudinary').v2;
-// ⚡ FIX: Import the module dynamically to support all versions
-const MulterCloudinary = require('multer-storage-cloudinary');
 
 // JSON Web Token for Secure Sessions
 const jwt = require('jsonwebtoken');
@@ -29,33 +23,29 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// 2. CLOUDINARY UPLOAD SETUP (Version-Proofed)
+// 2. FILE UPLOAD SETUP (CLOUDINARY)
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
+
+// Configure Cloudinary with your credentials
 cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-let storage;
-// Automatically detect which package version Render installed
-if (MulterCloudinary.CloudinaryStorage) {
-    // V4+ Setup
-    storage = new MulterCloudinary.CloudinaryStorage({
-        cloudinary: cloudinary,
-        params: {
-            folder: 'DeployDesk_Files',
-            resource_type: 'auto', 
-            allowedFormats: ['jpg', 'png', 'pdf', 'doc', 'docx', 'jpeg']
-        },
-    });
-} else {
-    // V1 / Legacy Setup
-    storage = MulterCloudinary({
-        cloudinary: cloudinary,
-        folder: 'DeployDesk_Files',
-        allowedFormats: ['jpg', 'png', 'pdf', 'doc', 'docx', 'jpeg']
-    });
-}
+// Set up the Cloudinary storage engine
+const storage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+        folder: 'deploydesk_attachments', // The folder name in your Cloudinary dashboard
+        resource_type: 'auto',            // CRITICAL: 'auto' allows PDFs, DOCX, and Zips (not just images)
+        public_id: (req, file) => {
+            const safeName = file.originalname.replace(/[^a-zA-Z0-9]/g, '_');
+            return Date.now() + '-' + safeName;
+        }
+    }
+});
 
 const upload = multer({ storage: storage });
 
@@ -357,74 +347,66 @@ app.post('/api/events/delete', (req, res) => {
     });
 });
 
-// ⚡ UPDATED: Handling Cloudinary file paths
-// ⚡ UPDATED: Catching Cloudinary Errors Safely
-app.post('/api/events', (req, res) => {
-    
-    // Wrap the upload so we can catch exactly what is crashing
-    const uploadHandler = upload.array('files', 10);
-    
-    uploadHandler(req, res, function (err) {
+app.post('/api/events', upload.array('files', 10), (req, res) => {
+    const { title, date, time, venue, members, type, requesterId } = req.body;
+    let baseDescription = req.body.description || '';
+    const personnelReqs = req.body.personnelReqs || '[]'; 
+    const reqCode = 'REQ-' + Math.floor(Date.now() / 1000) + Math.floor(Math.random() * 9); 
+
+    if (req.files && req.files.length > 0) {
+        baseDescription += `\n\n[Attached Documents]:`;
+        req.files.forEach(file => {
+            // file.path now contains the full https://res.cloudinary.com/... URL
+            baseDescription += `\n<a href="${file.path}" target="_blank" style="color:#1BA354;">📄 ${file.originalname}</a>`;
+        });
+    }
+
+    const safeRequesterId = parseInt(requesterId) || 0;
+    const safeMembers = parseInt(members) || 1;
+    const safeType = type || 'Event';
+    const defaultApprovals = JSON.stringify({ initial: [], forwarded: [], final: [] });
+
+    const query = `INSERT INTO event_requests (req_code, title, description, requester_id, event_date, start_time, venue, members_required, event_type, status, algo_status, personnel_reqs, admin_approvals) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'awaiting_initial_admin', 'clear', ?, ?)`;
+    const values = [reqCode, title, baseDescription, safeRequesterId, date, time, venue, safeMembers, safeType, personnelReqs, defaultApprovals];
+
+    db.query(query, values, (err, result) => {
         if (err) {
-            console.error('❌ CLOUDINARY UPLOAD ERROR:', err);
-            // This stops the crash and sends the exact error to the frontend/logs
-            return res.status(500).json({ success: false, message: 'Cloudinary Error: ' + err.message });
+            console.error('❌ MYSQL ERROR:', err.message);
+            return res.status(500).json({ success: false }); 
         }
 
-        // If upload succeeds, process the request
+        const eventId = result.insertId;
+        
         try {
-            const { title, date, time, venue, members, type, requesterId } = req.body;
-            let baseDescription = req.body.description || '';
-            const personnelReqs = req.body.personnelReqs || '[]'; 
-            const reqCode = 'REQ-' + Math.floor(Date.now() / 1000) + Math.floor(Math.random() * 9); 
+            const parsedReqs = JSON.parse(personnelReqs);
+            if (parsedReqs && parsedReqs.length > 0) {
+                const pythonProcess = spawn('python3', ['ccaa_engine.py', eventId, personnelReqs]);
+                pythonProcess.stdout.on('data', (data) => console.log(`🐍 Python Engine: ${data}`));
+                pythonProcess.stderr.on('data', (data) => console.error(`❌ Python Error: ${data}`));
+            }
+        } catch(e) {}
 
-            if (req.files && req.files.length > 0) {
-                baseDescription += `\n\n[Attached Documents]:`;
-                req.files.forEach(file => {
-                    baseDescription += `\n<a href="${file.path}" target="_blank" style="color:#1BA354;">📎 View Document</a>`;
+        // Admin Notified of New Request
+        db.query(`SELECT id, position, email FROM users WHERE role = 'admin'`, (err, admins) => {
+            if (admins && admins.length > 0) {
+                admins.forEach(admin => {
+                    db.query(`INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, 'warning', ?)`, [admin.id, `New Ticket: Event "${title}" needs your initial approval.`, eventId], () => {});
+                    if(admin.email) {
+                        sendEmail(admin.email, 'DeployDesk: New Ticket Requires Approval', `<div style="font-family:Arial; color:#333;"><p>Hello Admin,</p><p>A new event request <b>"${title}"</b> has been submitted and requires your initial approval before the matching engine can run.</p></div>`);
+                    }
                 });
             }
+        });
 
-            const safeRequesterId = parseInt(requesterId) || 0;
-            const safeMembers = parseInt(members) || 1;
-            const safeType = type || 'Event';
-            const defaultApprovals = JSON.stringify({ initial: [], forwarded: [], final: [] });
-
-            const query = `INSERT INTO event_requests (req_code, title, description, requester_id, event_date, start_time, venue, members_required, event_type, status, algo_status, personnel_reqs, admin_approvals) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'awaiting_initial_admin', 'clear', ?, ?)`;
-            const values = [reqCode, title, baseDescription, safeRequesterId, date, time, venue, safeMembers, safeType, personnelReqs, defaultApprovals];
-
-            db.query(query, values, (dbErr, result) => {
-                if (dbErr) {
-                    console.error('❌ MYSQL ERROR:', dbErr.message);
-                    return res.status(500).json({ success: false, message: 'Database error' }); 
-                }
-
-                const eventId = result.insertId;
-                
-                try {
-                    const parsedReqs = JSON.parse(personnelReqs);
-                    if (parsedReqs && parsedReqs.length > 0) {
-                        const pythonProcess = spawn('python3', ['ccaa_engine.py', eventId, personnelReqs]);
-                        pythonProcess.stdout.on('data', (data) => console.log(`🐍 Python Engine: ${data}`));
-                        pythonProcess.stderr.on('data', (data) => console.error(`❌ Python Error: ${data}`));
-                    }
-                } catch(e) {}
-
-                // Admin Notified of New Request
-                db.query(`SELECT id, position, email FROM users WHERE role = 'admin'`, (err, admins) => {
-                    if (admins && admins.length > 0) {
-                        admins.forEach(admin => {
-                            db.query(`INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, 'warning', ?)`, [admin.id, `New Ticket: Event "${title}" needs your initial approval.`, eventId], () => {});
-                        });
-                    }
-                });
-
-                res.json({ success: true });
-            });
-        } catch (serverErr) {
-            console.error('❌ SERVER ERROR:', serverErr);
-            res.status(500).json({ success: false, message: 'Server crash during save' });
-        }
+        // Requester Notified of Submission
+        db.query('INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, ?, ?)', [safeRequesterId, `Ticket Submitted: Your request for "${title}" is awaiting initial admin review.`, 'info', eventId], () => {});
+        db.query('SELECT email, full_name FROM users WHERE id = ?', [safeRequesterId], (err, users) => {
+            if(users && users.length > 0) {
+                sendEmail(users[0].email, 'DeployDesk: Ticket Submitted', `<div style="font-family:Arial; color:#333;"><p>Hello ${users[0].full_name},</p><p>Your event request <b>"${title}"</b> has been successfully submitted and is now awaiting admin review.</p></div>`);
+            }
+        });
+        
+        res.json({ success: true });
     });
 });
 
@@ -603,11 +585,13 @@ app.post('/api/allocations/accept', (req, res) => { db.query(`UPDATE event_alloc
 app.post('/api/allocations/decline', (req, res) => { db.query(`UPDATE event_allocations SET status = 'declined' WHERE id = ?`, [req.body.allocationId], (err) => res.json({ success: !err })); });
 
 app.get('/api/allocations/admin/:eventId', (req, res) => {
+    // Added u.avatar to the SELECT statement
     db.query(`SELECT a.*, u.full_name as user_name, u.avatar, (SELECT COUNT(*) FROM event_allocations ea JOIN event_requests er ON ea.event_id = er.id WHERE ea.user_id = a.user_id AND ea.status = 'assigned' AND er.status = 'approved') as current_workload FROM event_allocations a JOIN users u ON a.user_id = u.id WHERE a.event_id = ?`, [req.params.eventId], (err, results) => {
         res.json({ success: !err, allocations: results });
     });
 });
 app.get('/api/users', (req, res) => { 
+    // Added avatar to the SELECT statement
     db.query(`SELECT id, full_name, email, role, contact_number, position, created_at, avatar FROM users ORDER BY created_at DESC`, (err, results) => {
         res.json({ success: !err, users: results });
     }); 
@@ -660,11 +644,11 @@ app.post('/api/events/live-tracking-update', (req, res) => {
         }
     );
 });
-
 // ==========================================
 // UTILS, SCHEDULE, AND NOTIFICATIONS
 // ==========================================
 app.get('/api/workload-ranking', (req, res) => {
+    // Added u.avatar to the SELECT statement
     db.query(`SELECT u.id, u.full_name, u.position, u.role, u.avatar, (SELECT COUNT(*) FROM event_allocations ea JOIN event_requests er ON ea.event_id = er.id WHERE ea.user_id = u.id AND ea.status = 'assigned' AND er.status = 'approved' AND er.event_date >= CURDATE()) as active_tasks FROM users u WHERE u.role IN ('member', 'administrative') ORDER BY active_tasks DESC, u.full_name ASC`, (err, results) => {
         res.json({ success: !err, ranking: results });
     });
@@ -759,4 +743,3 @@ app.post('/api/notifications/read-all', (req, res) => { db.query(`UPDATE notific
 // Let Render decide the port, but fallback to 3000 for local testing
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
-
