@@ -369,7 +369,7 @@ app.post('/api/events', (req, res, next) => {
         next(); // If no error, continue to the route below
     });
 }, (req, res) => {
-    const { title, date, time, venue, members, type, requesterId } = req.body;
+    const { title, date, time, endTime, venue, members, type, requesterId } = req.body;
     let baseDescription = req.body.description || '';
     const personnelReqs = req.body.personnelReqs || '[]'; 
     const reqCode = 'REQ-' + Math.floor(Date.now() / 1000) + Math.floor(Math.random() * 9); 
@@ -388,6 +388,8 @@ app.post('/api/events', (req, res, next) => {
     const safeMembers = parseInt(members) || 1;
     const safeType = type || 'Event';
     const defaultApprovals = JSON.stringify({ initial: [], forwarded: [], final: [] });
+
+    const { title, date, time, endTime, venue, members, type, requesterId } = req.body;
 
     // Find the query in server.js and update it:
     const query = `INSERT INTO event_requests (req_code, title, description, requester_id, event_date, start_time, end_time, venue, members_required, event_type, status, algo_status, personnel_reqs, admin_approvals) 
