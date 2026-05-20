@@ -389,8 +389,12 @@ app.post('/api/events', (req, res, next) => {
     const safeType = type || 'Event';
     const defaultApprovals = JSON.stringify({ initial: [], forwarded: [], final: [] });
 
-    const query = `INSERT INTO event_requests (req_code, title, description, requester_id, event_date, start_time, venue, members_required, event_type, status, algo_status, personnel_reqs, admin_approvals) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'awaiting_initial_admin', 'clear', ?, ?)`;
-    const values = [reqCode, title, baseDescription, safeRequesterId, date, time, venue, safeMembers, safeType, personnelReqs, defaultApprovals];
+    // Find the query in server.js and update it:
+    const query = `INSERT INTO event_requests (req_code, title, description, requester_id, event_date, start_time, end_time, venue, members_required, event_type, status, algo_status, personnel_reqs, admin_approvals) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'awaiting_initial_admin', 'clear', ?, ?)`;
+
+    // Ensure your 'values' array now includes the 'endTime' variable (from req.body)
+    const values = [reqCode, title, baseDescription, safeRequesterId, date, time, endTime, venue, safeMembers, safeType, personnelReqs, defaultApprovals];
 
     db.query(query, values, (err, result) => {
         if (err) {
