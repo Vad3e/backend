@@ -345,7 +345,7 @@ app.post('/api/settings', (req, res) => {
 // EVENTS & PYTHON CCAA 
 // ==========================================
 app.get('/api/events', (req, res) => {
-    db.query(`SELECT e.*, u.full_name as requester_name FROM event_requests e LEFT JOIN users u ON e.requester_id = u.id ORDER BY e.event_date ASC`, (err, results) => {
+    db.query(`SELECT e.*, u.full_name as requester_name, u.position as requester_position FROM event_requests e LEFT JOIN users u ON e.requester_id = u.id ORDER BY e.event_date ASC`, (err, results) => {
         res.json({ success: !err, events: results });
     });
 });
