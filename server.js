@@ -369,7 +369,9 @@ app.post('/api/events', (req, res, next) => {
         next(); // If no error, continue to the route below
     });
 }, (req, res) => {
+    // 1. Only declare this ONCE at the top
     const { title, date, time, endTime, venue, members, type, requesterId } = req.body;
+    
     let baseDescription = req.body.description || '';
     const personnelReqs = req.body.personnelReqs || '[]'; 
     const reqCode = 'REQ-' + Math.floor(Date.now() / 1000) + Math.floor(Math.random() * 9); 
@@ -377,9 +379,7 @@ app.post('/api/events', (req, res, next) => {
     if (req.files && req.files.length > 0) {
         baseDescription += `\n\n[Attached Documents]:`;
         req.files.forEach(file => {
-            // ⚡ FIX: Bulletproof check for the URL regardless of the package version
             const cloudUrl = file.path || file.secure_url || file.url;
-            
             baseDescription += `\n<a href="${cloudUrl}" target="_blank" style="color:#1BA354; text-decoration: underline;">📄 ${file.originalname}</a>`;
         });
     }
@@ -389,13 +389,10 @@ app.post('/api/events', (req, res, next) => {
     const safeType = type || 'Event';
     const defaultApprovals = JSON.stringify({ initial: [], forwarded: [], final: [] });
 
-    const { title, date, time, endTime, venue, members, type, requesterId } = req.body;
-
-    // Find the query in server.js and update it:
+    // 2. Insert into the database
     const query = `INSERT INTO event_requests (req_code, title, description, requester_id, event_date, start_time, end_time, venue, members_required, event_type, status, algo_status, personnel_reqs, admin_approvals) 
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'awaiting_initial_admin', 'clear', ?, ?)`;
 
-    // Ensure your 'values' array now includes the 'endTime' variable (from req.body)
     const values = [reqCode, title, baseDescription, safeRequesterId, date, time, endTime, venue, safeMembers, safeType, personnelReqs, defaultApprovals];
 
     db.query(query, values, (err, result) => {
