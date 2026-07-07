@@ -483,7 +483,7 @@ app.post('/api/events/roster', (req, res) => {
 });
 
 app.post('/api/events/status', (req, res) => {
-    const { eventId, status, selectedAllocations, myOrg } = req.body;
+    const { eventId, status, selectedAllocations, myOrg, reason } = req.body;
 
     db.query(`SELECT personnel_reqs, admin_approvals, title FROM event_requests WHERE id = ?`, [eventId], (err, rows) => {
         if (err || rows.length === 0) return res.status(500).json({ success: false });
@@ -568,7 +568,8 @@ app.post('/api/events/status', (req, res) => {
                 }
             });
         } else {
-            db.query(`UPDATE event_requests SET status = ? WHERE id = ?`, [status, eventId], () => { 
+            // ⚡ UPDATED: Now it saves both the status AND the reason to your database!
+            db.query(`UPDATE event_requests SET status = ?, reason = ? WHERE id = ?`, [status, reason || null, eventId], () => { 
                 
                 if (status === 'rejected') {
                     db.query(`SELECT u.email, u.full_name, e.title, e.requester_id FROM event_requests e JOIN users u ON e.requester_id = u.id WHERE e.id = ?`, [eventId], (err, results) => {
