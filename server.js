@@ -570,32 +570,39 @@ app.post('/api/events/status', (req, res) => {
        } else {
             db.query(`UPDATE event_requests SET status = ?, reason = ? WHERE id = ?`, [status, reason || null, eventId], () => { 
                 
-                // ⚡ UPDATED: Now handles both Rejected and Cancelled emails/notifications
+                // ⚡ FIXED: Uses the correct sendEmail function and DeployDesk styling
                 if (status === 'rejected' || status === 'cancelled') {
-                    const actionWord = status === 'rejected' ? 'rejected' : 'cancelled';
+                    const actionWord = status === 'rejected' ? 'REJECTED' : 'CANCELLED';
                     const titleWord = status === 'rejected' ? 'Rejected' : 'Cancelled';
 
                     db.query(`SELECT u.email, u.full_name, e.title, e.requester_id FROM event_requests e JOIN users u ON e.requester_id = u.id WHERE e.id = ?`, [eventId], (err, results) => {
                         if(results && results.length > 0) {
-                            sendEmailNotification(
-                                results[0].email,
-                                `Event Request ${titleWord}`,
-                                `Hello ${results[0].full_name},\n\nYour event request "${results[0].title}" has been ${actionWord}.\n\nReason: ${reason || 'No specific reason provided.'}\n\nPlease contact the administrator for more details.`
-                            );
+                            const requester = results[0];
                             
-                            db.query(`INSERT INTO notifications (user_id, title, message) VALUES (?, ?, ?)`, 
-                                [results[0].requester_id, `Event ${titleWord}`, `Your event "${results[0].title}" was ${actionWord}. Reason: ${reason || 'No reason provided.'}`]
+                            // Send proper Database Notification
+                            db.query(`INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, 'error', ?)`, 
+                                [requester.requester_id, `Event ${titleWord}: Your request for "${requester.title}" was ${actionWord.toLowerCase()}. Reason: ${reason || 'No specific reason.'}`, eventId]
                             );
+
+                            // Send Email
+                            sendEmail(requester.email, `DeployDesk: Event ${titleWord} (${requester.title})`, `
+                                <div style="font-family: Arial, sans-serif; color: #333;">
+                                    <p>Hello <strong>${requester.full_name}</strong>,</p>
+                                    <p>Your event "<strong>${requester.title}</strong>" has been <span style="color: #d02020; font-weight: bold;">${actionWord}</span>.</p>
+                                    <p><strong>Reason:</strong> ${reason || 'No specific reason provided.'}</p>
+                                    <p>If you have any questions, please contact the administration.</p>
+                                </div>
+                            `);
                         }
                     });
 
-                    // ⚡ ADDED: If cancelled, free up the members by deleting their task assignments!
+                    // Free up members if cancelled
                     if (status === 'cancelled') {
                         db.query(`DELETE FROM event_allocations WHERE event_id = ?`, [eventId]);
                     }
                 }
                 
-                res.json({ success: true });
+                res.json({ success: true, message: `Status updated to ${status}!` }); 
             });
         }
     });
