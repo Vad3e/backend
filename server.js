@@ -570,21 +570,20 @@ app.post('/api/events/status', (req, res) => {
        } else {
             db.query(`UPDATE event_requests SET status = ?, reason = ? WHERE id = ?`, [status, reason || null, eventId], () => { 
                 
-                // ⚡ FIXED: Uses the correct sendEmail function and DeployDesk styling
                 if (status === 'rejected' || status === 'cancelled') {
                     const actionWord = status === 'rejected' ? 'REJECTED' : 'CANCELLED';
                     const titleWord = status === 'rejected' ? 'Rejected' : 'Cancelled';
+                    const notifType = status === 'rejected' ? 'error' : 'warning';
 
+                    // 1. Notify the Requester
                     db.query(`SELECT u.email, u.full_name, e.title, e.requester_id FROM event_requests e JOIN users u ON e.requester_id = u.id WHERE e.id = ?`, [eventId], (err, results) => {
                         if(results && results.length > 0) {
                             const requester = results[0];
                             
-                            // Send proper Database Notification
-                            db.query(`INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, 'error', ?)`, 
-                                [requester.requester_id, `Event ${titleWord}: Your request for "${requester.title}" was ${actionWord.toLowerCase()}. Reason: ${reason || 'No specific reason.'}`, eventId]
+                            db.query(`INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, ?, ?)`, 
+                                [requester.requester_id, `Event ${titleWord}: Your request for "${requester.title}" was ${actionWord.toLowerCase()}. Reason: ${reason || 'No specific reason.'}`, notifType, eventId]
                             );
 
-                            // Send Email
                             sendEmail(requester.email, `DeployDesk: Event ${titleWord} (${requester.title})`, `
                                 <div style="font-family: Arial, sans-serif; color: #333;">
                                     <p>Hello <strong>${requester.full_name}</strong>,</p>
@@ -596,9 +595,39 @@ app.post('/api/events/status', (req, res) => {
                         }
                     });
 
-                    // Free up members if cancelled
+                    // 2. ⚡ ADDED: Notify all assigned Members BEFORE deleting their tasks
                     if (status === 'cancelled') {
-                        db.query(`DELETE FROM event_allocations WHERE event_id = ?`, [eventId]);
+                        db.query(`
+                            SELECT u.id as user_id, u.email, u.full_name, e.title 
+                            FROM event_allocations a 
+                            JOIN users u ON a.user_id = u.id 
+                            JOIN event_requests e ON a.event_id = e.id
+                            WHERE a.event_id = ?
+                        `, [eventId], (err, members) => {
+                            if (members && members.length > 0) {
+                                const eventTitle = members[0].title;
+                                
+                                members.forEach(member => {
+                                    // Send Database Notification to Member
+                                    db.query(`INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, 'warning', ?)`, 
+                                        [member.user_id, `Coverage Cancelled: "${eventTitle}" was cancelled. Reason: ${reason || 'None provided.'}`, eventId]
+                                    );
+
+                                    // Send Email to Member
+                                    sendEmail(member.email, `DeployDesk: Coverage Cancelled (${eventTitle})`, `
+                                        <div style="font-family: Arial, sans-serif; color: #333;">
+                                            <p>Hello <strong>${member.full_name}</strong>,</p>
+                                            <p>Please be informed that the event "<strong>${eventTitle}</strong>" has been <span style="color: #d02020; font-weight: bold;">CANCELLED</span> by the administration.</p>
+                                            <p><strong>Reason:</strong> ${reason || 'No specific reason provided.'}</p>
+                                            <p>You have been automatically unassigned from this coverage, and your schedule has been freed up.</p>
+                                        </div>
+                                    `);
+                                });
+                            }
+                            
+                            // 3. Finally, delete the allocations to free up their workload
+                            db.query(`DELETE FROM event_allocations WHERE event_id = ?`, [eventId]);
+                        });
                     }
                 }
                 
