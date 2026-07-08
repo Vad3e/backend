@@ -567,27 +567,35 @@ app.post('/api/events/status', (req, res) => {
                     res.json({ success: true, message: "Your team is assigned. Waiting for Partner Admin." });
                 }
             });
-        } else {
-            // ⚡ UPDATED: Now it saves both the status AND the reason to your database!
+       } else {
             db.query(`UPDATE event_requests SET status = ?, reason = ? WHERE id = ?`, [status, reason || null, eventId], () => { 
                 
-                if (status === 'rejected') {
+                // ⚡ UPDATED: Now handles both Rejected and Cancelled emails/notifications
+                if (status === 'rejected' || status === 'cancelled') {
+                    const actionWord = status === 'rejected' ? 'rejected' : 'cancelled';
+                    const titleWord = status === 'rejected' ? 'Rejected' : 'Cancelled';
+
                     db.query(`SELECT u.email, u.full_name, e.title, e.requester_id FROM event_requests e JOIN users u ON e.requester_id = u.id WHERE e.id = ?`, [eventId], (err, results) => {
-                        if (results && results.length > 0) {
-                            const requester = results[0];
-                            db.query(`INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, 'error', ?)`, [requester.requester_id, `Event Rejected: Your request for "${requester.title}" was declined.`, eventId]);
-                            sendEmail(requester.email, `DeployDesk: Event Update (${requester.title})`, `
-                                <div style="font-family: Arial, sans-serif; color: #333;">
-                                    <p>Hello <strong>${requester.full_name}</strong>,</p>
-                                    <p>Unfortunately, your event request for "<strong>${requester.title}</strong>" has been <span style="color: #d02020; font-weight: bold;">REJECTED</span> or CANCELLED by the administration.</p>
-                                    <p>If you have any questions or need to submit a revised request, please contact the organization administrators.</p>
-                                </div>
-                            `);
+                        if(results && results.length > 0) {
+                            sendEmailNotification(
+                                results[0].email,
+                                `Event Request ${titleWord}`,
+                                `Hello ${results[0].full_name},\n\nYour event request "${results[0].title}" has been ${actionWord}.\n\nReason: ${reason || 'No specific reason provided.'}\n\nPlease contact the administrator for more details.`
+                            );
+                            
+                            db.query(`INSERT INTO notifications (user_id, title, message) VALUES (?, ?, ?)`, 
+                                [results[0].requester_id, `Event ${titleWord}`, `Your event "${results[0].title}" was ${actionWord}. Reason: ${reason || 'No reason provided.'}`]
+                            );
                         }
                     });
+
+                    // ⚡ ADDED: If cancelled, free up the members by deleting their task assignments!
+                    if (status === 'cancelled') {
+                        db.query(`DELETE FROM event_allocations WHERE event_id = ?`, [eventId]);
+                    }
                 }
                 
-                res.json({ success: true, message: `Status updated to ${status}!` }); 
+                res.json({ success: true });
             });
         }
     });
