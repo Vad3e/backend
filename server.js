@@ -652,7 +652,57 @@ app.get('/api/allocations/member/:userId', (req, res) => {
         res.json({ success: !err, tasks: results || [] });
     });
 });
-app.post('/api/allocations/accept', (req, res) => { db.query(`UPDATE event_allocations SET status = 'accepted' WHERE id = ?`, [req.body.allocationId], (err) => res.json({ success: !err })); });
+app.post('/api/allocations/accept', (req, res) => { 
+    const allocationId = req.body.allocationId;
+    
+    db.query(`UPDATE event_allocations SET status = 'accepted' WHERE id = ?`, [allocationId], (err) => {
+        if (err) return res.json({ success: false });
+
+        // Fetch the allocation details to determine the user's role and organization
+        db.query(`
+            SELECT a.event_id, a.required_role, e.title, u.full_name, u.role
+            FROM event_allocations a
+            JOIN event_requests e ON a.event_id = e.id
+            JOIN users u ON a.user_id = u.id
+            WHERE a.id = ?
+        `, [allocationId], (err, results) => {
+            if (results && results.length > 0) {
+                const alloc = results[0];
+                
+                // Only send the notification if the person accepting is a standard member
+                if (alloc.role === 'member') {
+                    const myOrg = alloc.required_role ? alloc.required_role.split(' - ')[0] : '';
+
+                    // ⚡ UPDATED: Now grabs the 'email' column as well
+                    db.query(`SELECT id, email FROM users WHERE role = 'administrative' AND position LIKE ?`, [`%${myOrg}%`], (err, admins) => {
+                        if (admins && admins.length > 0) {
+                            admins.forEach(admin => {
+                                // 1. Send Database Notification
+                                const msg = `Task Accepted: ${alloc.full_name} accepted the task for "${alloc.title}". The coverage team is ready to forward the roster.`;
+                                db.query(`INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, 'info', ?)`, 
+                                    [admin.id, msg, alloc.event_id]
+                                );
+                                
+                                // 2. ⚡ ADDED: Send Email Notification
+                                if (admin.email) {
+                                    sendEmail(admin.email, 'DeployDesk: Roster Ready for Forwarding', `
+                                        <div style="font-family: Arial, sans-serif; color: #333;">
+                                            <p>Hello Admin Assistant,</p>
+                                            <p><strong>${alloc.full_name}</strong> has just accepted their task for the event <strong>"${alloc.title}"</strong>.</p>
+                                            <p>The coverage team is ready to be forwarded for final deployment approval. Please check your dashboard.</p>
+                                        </div>
+                                    `);
+                                }
+                            });
+                        }
+                    });
+                }
+            }
+        });
+        
+        res.json({ success: true }); 
+    }); 
+});
 app.post('/api/allocations/decline', (req, res) => { db.query(`UPDATE event_allocations SET status = 'declined' WHERE id = ?`, [req.body.allocationId], (err) => res.json({ success: !err })); });
 
 app.get('/api/allocations/admin/:eventId', (req, res) => {
