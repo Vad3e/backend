@@ -432,6 +432,29 @@ app.post('/api/events', (req, res, next) => {
             }
         });
         
+        // ⚡ 3. Broadcast to ALL Members (Updated wording)
+        db.query(`SELECT id, email, full_name FROM users WHERE role IN ('member', 'administrative')`, (err, allMembers) => {
+            if (allMembers && allMembers.length > 0) {
+                allMembers.forEach(member => {
+                    // Dashboard Notification
+                    db.query(`INSERT INTO notifications (user_id, message, type, event_id) VALUES (?, ?, 'info', ?)`, 
+                        [member.id, `📢 Broadcast: A new event request for "${title}" has been submitted to the administration.`, eventId], () => {});
+                    
+                    // Email Notification
+                    if(member.email) {
+                        const broadcastHtml = `
+                            <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.6; max-width: 600px; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
+                                <h3 style="color: #32ac54; margin-top: 0;">📢 Organization Broadcast</h3>
+                                <p>Hello <strong>${member.full_name}</strong>,</p>
+                                <p>This is a general system update to inform you that a new event request titled <b>"${title}"</b> has been submitted to DeployDesk.</p>
+                                <p style="font-size: 13px; color: #666; margin-top: 20px;">The event is currently being reviewed by the administration. The system will notify you separately if your schedule and role match the event's needs after it is approved.</p>
+                            </div>
+                        `;
+                        sendEmail(member.email, `DeployDesk Broadcast: New Event Requested (${title})`, broadcastHtml);
+                    }
+                });
+            }
+        });
         res.json({ success: true });
     });
 });
